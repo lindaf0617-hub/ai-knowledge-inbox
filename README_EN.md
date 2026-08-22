@@ -15,6 +15,7 @@ It provides:
 - Projects, tags, summaries, keyword search, and local semantic vectors
 - Grounded Ask: local retrieval, browser built-in AI, and `[K1]` citations
 - Local SQLite storage and user-owned OneDrive sync
+- Causal operation-log sync, explicit conflict resolution, and seven retained daily SQLite backups
 - Chinese and English UI
 - Markdown and JSON export
 
@@ -48,6 +49,14 @@ The macOS Beta is not notarized yet. Control-click the app and choose **Open** o
 - Ask uses browser built-in AI only when Prompt API is supported.
 
 See [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md).
+
+Sync v2 stores one device-owned operation log per device under
+`Apps\AI Knowledge Inbox\operations`; `knowledge-sync.json` remains a readable
+compatibility snapshot. The desktop service exposes `/sync/status`,
+`/sync/conflicts`, and `/backups` for diagnostics, resolution, and recovery.
+During the bounded v1 migration window, v2 treats that snapshot as read-only
+input to avoid overwriting late v1 changes; v1 devices therefore do not receive
+new v2-originated changes until the window is completed.
 
 ---
 

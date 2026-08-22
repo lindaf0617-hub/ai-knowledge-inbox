@@ -10,3 +10,4 @@ knowledge-sync.json
 Thumbs.db
 .vscode/
 .idea/
+tests/.server-fixtures/

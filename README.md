@@ -17,6 +17,7 @@ AI Knowledge Inbox 解决一个简单问题：**AI 每天生成很多有价值�
 - 项目、标签、摘要、关键词与本地语义搜索
 - Ask 知识库：本地检索，浏览器内置 AI 综合，回答附 `[K1]` 引用
 - SQLite 本地存储和用户自己的 OneDrive 同步
+- 因果操作日志同步、显式冲突处理与保留 7 份的每日 SQLite 备份
 - 中文 / English 界面
 - Markdown 和 JSON 导出
 
@@ -52,6 +53,12 @@ Windows 解压后运行 `安装 Beta.cmd`。macOS 首个 Beta 尚未签名，需
 - Ask 仅在浏览器支持 Prompt API 时调用内置 AI
 
 详见 [PRIVACY.md](PRIVACY.md) 与 [SECURITY.md](SECURITY.md)。
+
+同步 v2 在 OneDrive 的 `Apps\AI Knowledge Inbox\operations` 中为每台设备保存独立操作日志；
+`knowledge-sync.json` 仅是可读兼容快照。桌面服务提供 `/sync/status`、`/sync/conflicts`
+和 `/backups` 接口用于检查同步、解决冲突及恢复本地备份。
+在限时 v1 迁移窗口内，v2 只读取兼容快照，以免覆盖仍在运行的 v1 设备写入；
+因此窗口完成前，v1 设备不会收到 v2 新产生的更改。
 
 ---
 

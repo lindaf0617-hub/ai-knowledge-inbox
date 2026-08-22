@@ -73,13 +73,23 @@ Windows 使用 `Ctrl + ;`，桌面伴侣通过本地 HTTP 服务写入 SQLite。
 
 没有把 SQLite 文件直接放入 OneDrive，因为数据库锁、WAL 和多端同时写入可能导致损坏。
 
-实际方案：
+初始方案：
 
 - SQLite 仍是本地主库
 - OneDrive 中保存可合并 JSON 快照
 - 条目采用最后修改时间优先
 - 删除通过 tombstone 传播，避免旧快照让知识“复活”
 - 保存后快速同步，每分钟拉取其他设备更新
+
+同步 v2 将共享快照改为：
+
+- 每台设备只原子写入自己的 `operations/<device-id>.json`
+- 每个新增、修改和删除操作携带设备、逻辑计数与版本向量
+- 因果上占优的操作自动应用；并发操作按稳定规则选择当前结果，同时持久化冲突供用户选择本地、传入或合并版本
+- `knowledge-sync.json` 继续生成，但只作为可读兼容快照，不再是权威同步源
+- 限时混合版本迁移窗口内，v2 只读兼容快照并将 v1 变更转为操作；窗口结束前 v1 不接收 v2 新变更
+- SQLite 使用显式版本迁移；v1 数据库升级后保留条目和 tombstone
+- 每日创建本地 SQLite 一致性备份，保留最近 7 份；恢复前自动创建安全备份
 
 ### 阶段 E：Ask 知识库
 
@@ -124,7 +134,8 @@ flowchart LR
     A[Edge / Chrome Extension] -->|localhost API| C[Local Knowledge Service]
     B[Windows / macOS Companion] -->|localhost API| C
     C --> D[(SQLite)]
-    C --> E[OneDrive Merge Snapshot]
+    C --> E[OneDrive Per-device Operation Logs]
+    C --> I[Retained SQLite Backups]
     A --> F[Local Hybrid Retrieval]
     F --> G[Browser Built-in AI]
     G --> H[Cited Answer]
@@ -173,7 +184,7 @@ AI Knowledge Inbox 不是又一个聊天机器人，也不是单纯的网页收�
 - macOS Beta 尚未签名和公证
 - 浏览器 Prompt API 并非所有设备可用
 - 本地语义向量是轻量实现，不等同于大型 Embedding 模型
-- OneDrive 冲突采用条目级最后写入优先
+- 并发同步冲突需要用户在桌面服务 API 中明确解决，浏览器 UI 尚未提供冲突管理界面
 - 浏览器扩展尚未上架商店
 - 自动 Agent 写库尚未开放，需先完成权限和审批机制
 
