@@ -61,7 +61,7 @@ Agent 审批知识也不能直接删除；知识库中的操作会显示“撤�
 
 ## 安装
 
-从 [v1.6.0 Beta](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/tag/v1.6.0) 下载：
+从 [v1.7.0-beta.1](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/tag/v1.7.0-beta.1) 下载：
 
 - Windows Beta：`AI-Knowledge-Inbox-<version>-Windows-unsigned.zip`
 - Apple Silicon：`AI-Knowledge-Inbox-<version>-macOS-arm64-unsigned.dmg`

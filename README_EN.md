@@ -69,7 +69,7 @@ proposal-derived deterministic canonical entry ID as the approval target.
 
 ## Install
 
-Download the [v1.6.0 Beta](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/tag/v1.6.0):
+Download [v1.7.0-beta.1](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/tag/v1.7.0-beta.1):
 
 - Windows Beta: `AI-Knowledge-Inbox-<version>-Windows-unsigned.zip`
 - Apple Silicon: `AI-Knowledge-Inbox-<version>-macOS-arm64-unsigned.dmg`

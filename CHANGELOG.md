@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.7.0-beta.1
+
+- Added an approval-based Knowledge Agent with pinned evidence, candidate cards, per-card approval/rejection, undo, provenance, confidence, lifecycle status, and immutable audit history.
+- Added browser Prompt API and localhost-only Ollama providers with scored excerpts, clickable citations, strict citation validation, and persistent grounding warnings.
+- Added authenticated local APIs with one-time desktop pairing, nonce/HMAC service identity proof, strict extension origin handling, and redacted diagnostics.
+- Added schema-v2 causal operation-log synchronization, mixed-version reconciliation, deterministic conflicts, degraded-file isolation, retained backups, safe restore, and crash recovery.
+- Added version/protocol status, manual update checks, deterministic store packages, signed stable-release policy, macOS notarization support, artifact manifests, payload verification, and portable checksums.
+- Added 98 automated tests covering migration, sync, restore, authentication, retrieval, citations, distribution, and Agent approval convergence.
+
 - Added per-install bearer authentication for sensitive local APIs, timing-safe verification, extension-origin enforcement, and minimal unauthenticated health checks.
 - Added nonce-bound HMAC service-identity proof before clients send bearer credentials or sensitive bodies, preventing localhost port impersonation from stealing stored tokens.
 - Added one-time desktop-mediated extension pairing, explicit pairing-required UI, authenticated migration that preserves browser-local data, and Windows/macOS pairing actions.
