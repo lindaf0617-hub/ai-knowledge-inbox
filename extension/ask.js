@@ -3,7 +3,8 @@ const askState = {
   sources: [],
   question: "",
   answer: "",
-  mode: "synthesize"
+  mode: "synthesize",
+  citationValidation: null
 };
 I18n.bindPicker(document.getElementById("languagePicker"));
 
@@ -137,9 +138,25 @@ async function askKnowledgeBase() {
       askState.mode
       , I18n.getLanguage()
     );
+    askState.citationValidation = CitationGuard.validate(
+      askState.answer,
+      askState.sources.length
+    );
+    if (askState.citationValidation.invalid.length) {
+      throw new Error(
+        `AI 返回了无效引用：${
+          askState.citationValidation.invalid.map(id => `[K${id}]`).join("、")
+        }`
+      );
+    }
     MarkdownRenderer.render(askElements.markdown, askState.answer);
     askElements.empty.classList.add("hidden");
     askElements.content.classList.remove("hidden");
+    if (askState.citationValidation.uncited.length) {
+      showToast(I18n.getLanguage() === "en"
+        ? "Answer generated; some long paragraphs have no citation"
+        : "回答已生成，但部分长段落没有引用");
+    }
   } catch (error) {
     showToast(error.message || "生成回答失败");
   } finally {

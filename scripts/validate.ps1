@@ -54,6 +54,7 @@ if ($manifest.manifest_version -ne 3) {
 foreach ($required in @(
     "extension\ask.html",
     "extension\i18n.js",
+    "extension\citations.js",
     "macos\Sources\AIKnowledgeCompanion\main.swift",
     "scripts\build-macos.sh",
     "HACKATHON.md",

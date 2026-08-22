@@ -2,6 +2,8 @@
 
 > 把散落在 Copilot、ChatGPT、Claude 和网页里的 AI 产出，变成一个本地优先、可搜索、可追溯、可继续生长的个人知识库。
 
+[English](README_EN.md)
+
 Windows / macOS companion | Edge / Chrome extension | SQLite | OneDrive | Cited Ask
 
 ---
@@ -28,7 +30,7 @@ AI Knowledge Inbox 解决一个简单问题：**AI 每天生成很多有价值�
 
 ## 安装
 
-从 [Releases](https://github.com/lfeng_microsoft/ai-knowledge-inbox/releases/latest) 下载：
+从 [v1.6.0 Beta](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/tag/v1.6.0) 下载：
 
 - Windows：`AI-Knowledge-Inbox-<version>-Windows.zip`
 - macOS：`AI-Knowledge-Inbox-<version>-macOS-unsigned.dmg`
@@ -54,6 +56,7 @@ Windows 解压后运行 `安装 Beta.cmd`。macOS 首个 Beta 尚未签名，需
 
 ## 项目资料
 
+- [唯一源码与发布规则](SOURCE_OF_TRUTH.md)
 - [完整项目记录](PROJECT_RECORD.md)
 - [黑客松项目陈述](HACKATHON.md)
 - [知识 Agent 路线图](AGENT_ROADMAP.md)

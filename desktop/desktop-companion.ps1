@@ -63,6 +63,12 @@ public sealed class GlobalHotKeyWindow : NativeWindow, IDisposable
 public static class WindowChrome
 {
     [DllImport("user32.dll")]
+    private static extern bool SetProcessDPIAware();
+
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+
+    [DllImport("user32.dll")]
     private static extern bool ReleaseCapture();
 
     [DllImport("user32.dll")]
@@ -73,8 +79,25 @@ public static class WindowChrome
         ReleaseCapture();
         SendMessage(handle, 0x00A1, (IntPtr)0x0002, IntPtr.Zero);
     }
+
+    public static void EnableDpiAwareness()
+    {
+        try
+        {
+            if (!SetProcessDpiAwarenessContext((IntPtr)(-4)))
+            {
+                SetProcessDPIAware();
+            }
+        }
+        catch (EntryPointNotFoundException)
+        {
+            SetProcessDPIAware();
+        }
+    }
 }
 "@
+
+[WindowChrome]::EnableDpiAwareness()
 
 function Test-KnowledgeService {
     try {
@@ -142,16 +165,16 @@ function Show-CaptureWindow {
     }
 
     $script:captureOpen = $true
-    $bg = [System.Drawing.ColorTranslator]::FromHtml("#343231")
-    $surface = [System.Drawing.ColorTranslator]::FromHtml("#292929")
-    $soft = [System.Drawing.ColorTranslator]::FromHtml("#2E2E2E")
-    $border = [System.Drawing.ColorTranslator]::FromHtml("#474747")
-    $text = [System.Drawing.ColorTranslator]::FromHtml("#DEDEDE")
-    $muted = [System.Drawing.ColorTranslator]::FromHtml("#B0B0B0")
-    $accent = [System.Drawing.ColorTranslator]::FromHtml("#FD8EA1")
-    $accentHover = [System.Drawing.ColorTranslator]::FromHtml("#FB7B91")
-    $success = [System.Drawing.ColorTranslator]::FromHtml("#4ADE80")
-    $link = [System.Drawing.ColorTranslator]::FromHtml("#4DA6FF")
+    $bg = [System.Drawing.ColorTranslator]::FromHtml("#08172B")
+    $surface = [System.Drawing.ColorTranslator]::FromHtml("#122743")
+    $soft = [System.Drawing.ColorTranslator]::FromHtml("#193251")
+    $border = [System.Drawing.ColorTranslator]::FromHtml("#31506F")
+    $text = [System.Drawing.ColorTranslator]::FromHtml("#F8FBFF")
+    $muted = [System.Drawing.ColorTranslator]::FromHtml("#AEC5DF")
+    $accent = [System.Drawing.ColorTranslator]::FromHtml("#52D8F2")
+    $accentHover = [System.Drawing.ColorTranslator]::FromHtml("#75E5F7")
+    $success = [System.Drawing.ColorTranslator]::FromHtml("#63E5C5")
+    $link = [System.Drawing.ColorTranslator]::FromHtml("#A99DF7")
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "Save to AI Knowledge Inbox"
@@ -161,7 +184,7 @@ function Show-CaptureWindow {
     $form.TopMost = $true
     $form.BackColor = $link
     $form.Padding = New-Object System.Windows.Forms.Padding(1)
-    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
     $form.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
 
     $root = New-Object System.Windows.Forms.Panel
@@ -187,7 +210,7 @@ function Show-CaptureWindow {
     $logo.Location = New-Object System.Drawing.Point(24, 21)
     $logo.Size = New-Object System.Drawing.Size(44, 44)
     $logo.BackColor = $accent
-    $logo.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#1A1A1A")
+    $logo.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#061526")
     $logo.Font = New-Object System.Drawing.Font("Consolas", 13, [System.Drawing.FontStyle]::Bold)
     $logo.Text = "AI"
     $logo.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
@@ -229,7 +252,7 @@ function Show-CaptureWindow {
     $sourceBadge = New-Object System.Windows.Forms.Label
     $sourceBadge.Location = New-Object System.Drawing.Point(24, 101)
     $sourceBadge.Size = New-Object System.Drawing.Size(145, 24)
-    $sourceBadge.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#3A3033")
+    $sourceBadge.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#183552")
     $sourceBadge.ForeColor = $accent
     $sourceBadge.Font = New-Object System.Drawing.Font("Consolas", 8, [System.Drawing.FontStyle]::Bold)
     $sourceBadge.Text = "SOURCE // COPILOT"
@@ -281,7 +304,7 @@ function Show-CaptureWindow {
     $contentBox.Location = New-Object System.Drawing.Point(22, 112)
     $contentBox.Size = New-Object System.Drawing.Size(604, 235)
     $contentBox.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-    $contentBox.BackColor = $soft
+    $contentBox.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#0D213B")
     $contentBox.ForeColor = $text
     $contentBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
     $contentBox.DetectUrls = $false
@@ -341,7 +364,7 @@ function Show-CaptureWindow {
     $saveButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $saveButton.FlatAppearance.BorderSize = 0
     $saveButton.BackColor = $accent
-    $saveButton.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#1A1A1A")
+    $saveButton.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#061526")
     $saveButton.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9.5)
     $saveButton.Cursor = [System.Windows.Forms.Cursors]::Hand
     $saveButton.Add_MouseEnter({ if ($saveButton.Enabled) { $saveButton.BackColor = $accentHover } })
@@ -414,6 +437,15 @@ function Show-CaptureWindow {
         $path.CloseFigure()
         $form.Region = New-Object System.Drawing.Region($path)
         $path.Dispose()
+        $cardPath = New-Object System.Drawing.Drawing2D.GraphicsPath
+        $cardRadius = 24
+        $cardPath.AddArc(0, 0, $cardRadius, $cardRadius, 180, 90)
+        $cardPath.AddArc($card.Width - $cardRadius, 0, $cardRadius, $cardRadius, 270, 90)
+        $cardPath.AddArc($card.Width - $cardRadius, $card.Height - $cardRadius, $cardRadius, $cardRadius, 0, 90)
+        $cardPath.AddArc(0, $card.Height - $cardRadius, $cardRadius, $cardRadius, 90, 90)
+        $cardPath.CloseFigure()
+        $card.Region = New-Object System.Drawing.Region($cardPath)
+        $cardPath.Dispose()
         $titleBox.SelectAll()
         $titleBox.Focus()
     })

@@ -17,7 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build unsigned macOS package
-        run: bash scripts/build-macos.sh 1.5.0
+        run: |
+          version="$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')"
+          bash scripts/build-macos.sh "$version"
       - uses: actions/upload-artifact@v4
         with:
           name: macos-package

@@ -19,6 +19,9 @@ jobs:
       - name: Validate source
         shell: powershell
         run: .\scripts\validate.ps1
+      - name: Run integration tests
+        shell: powershell
+        run: node --test tests\*.test.js
       - name: Build artifacts
         shell: powershell
         run: |

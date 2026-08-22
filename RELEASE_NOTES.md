@@ -1,10 +1,10 @@
-# AI Knowledge Inbox 1.5.0 Beta
+# AI Knowledge Inbox 1.6.0 Beta
 
-- Added cited Ask with browser built-in AI
-- Added Chinese / English browser UI
-- Added Windows and macOS desktop companions
-- Added Technology Skin 2 across library and desktop capture
-- Added local SQLite and user-owned OneDrive sync
+- New luminous Technology Skin 2: navy, cyan, mint, and lilac
+- More bright surfaces and rounded cards across desktop and web
+- Dedicated English README and English product page
+- Windows high-DPI capture-window sizing fix
+- Windows and macOS desktop companions with cited Ask
 
 **Desktop shortcuts:** Windows `Ctrl + ;` · macOS `Command + ;`
 

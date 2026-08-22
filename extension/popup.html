@@ -45,6 +45,24 @@
       color: var(--cp-text-muted);
       font-size: 11px;
     }
+    html[data-skin="tech"] body {
+      border-top: 4px solid var(--cp-accent);
+      background:
+        radial-gradient(circle at 90% 0, rgba(82, 216, 242, 0.2), transparent 35%),
+        var(--cp-bg-elevated);
+    }
+    html[data-skin="tech"] main {
+      margin: 8px;
+      border: 1px solid var(--cp-border);
+      border-radius: 20px;
+      background: rgba(18, 39, 67, 0.9);
+      box-shadow: var(--cp-shadow);
+    }
+    html[data-skin="tech"] h1 {
+      background: linear-gradient(100deg, var(--cp-text), var(--cp-accent), var(--cp-success));
+      background-clip: text;
+      color: transparent;
+    }
     .label-row {
       display: flex;
       align-items: center;

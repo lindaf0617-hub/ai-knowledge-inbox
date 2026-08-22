@@ -104,6 +104,7 @@ const I18n = (() => {
     "当前浏览器未启用内置 AI，请使用支持 Prompt API 的 Chrome/Edge 版本": "Browser built-in AI is not enabled. Use a Chrome/Edge version that supports Prompt API.",
     "当前设备不支持浏览器内置 AI": "This device does not support browser built-in AI",
     "浏览器 AI 未生成回答": "Browser AI did not generate an answer",
+    "回答已生成，但部分长段落没有引用": "Answer generated; some long paragraphs have no citation",
     "Ask AI 知识库": "Ask AI Knowledge Base",
     "PRIVATE RAG // ON-DEVICE AI": "PRIVATE RAG // ON-DEVICE AI",
     "KNOWLEDGE SYSTEM // ONLINE": "KNOWLEDGE SYSTEM // ONLINE"

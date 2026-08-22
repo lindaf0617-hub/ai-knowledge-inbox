@@ -250,7 +250,7 @@ final class CaptureWindowController: NSWindowController {
         )
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.backgroundColor = NSColor(calibratedWhite: 0.16, alpha: 1)
+        window.backgroundColor = NSColor(calibratedRed: 0.03, green: 0.09, blue: 0.17, alpha: 1)
         window.isReleasedWhenClosed = false
         super.init(window: window)
         buildUI(content: content)
@@ -260,11 +260,11 @@ final class CaptureWindowController: NSWindowController {
 
     private func buildUI(content: String) {
         guard let root = window?.contentView else { return }
-        let accent = NSColor(calibratedRed: 0.99, green: 0.56, blue: 0.63, alpha: 1)
-        let link = NSColor(calibratedRed: 0.30, green: 0.65, blue: 1, alpha: 1)
-        let text = NSColor(calibratedWhite: 0.87, alpha: 1)
-        let muted = NSColor(calibratedWhite: 0.68, alpha: 1)
-        let surface = NSColor(calibratedWhite: 0.18, alpha: 1)
+        let accent = NSColor(calibratedRed: 0.32, green: 0.85, blue: 0.95, alpha: 1)
+        let link = NSColor(calibratedRed: 0.66, green: 0.62, blue: 0.97, alpha: 1)
+        let text = NSColor(calibratedRed: 0.97, green: 0.98, blue: 1, alpha: 1)
+        let muted = NSColor(calibratedRed: 0.68, green: 0.77, blue: 0.87, alpha: 1)
+        let surface = NSColor(calibratedRed: 0.07, green: 0.15, blue: 0.26, alpha: 1)
 
         let stack = NSStackView()
         stack.orientation = .vertical
@@ -299,7 +299,7 @@ final class CaptureWindowController: NSWindowController {
         contentView.string = content
         contentView.font = NSFont.systemFont(ofSize: 14)
         contentView.textColor = text
-        contentView.backgroundColor = NSColor(calibratedWhite: 0.13, alpha: 1)
+        contentView.backgroundColor = NSColor(calibratedRed: 0.05, green: 0.13, blue: 0.23, alpha: 1)
         contentView.isRichText = false
         contentView.textContainerInset = NSSize(width: 10, height: 10)
         let scroll = NSScrollView()
@@ -323,7 +323,12 @@ final class CaptureWindowController: NSWindowController {
 
         let footer = NSStackView()
         footer.orientation = .horizontal
-        let status = label("SYSTEM ONLINE // SQLITE LOCAL // ONEDRIVE SYNC", size: 11, color: .systemGreen, mono: true)
+        let status = label(
+            "SYSTEM ONLINE // SQLITE LOCAL // ONEDRIVE SYNC",
+            size: 11,
+            color: NSColor(calibratedRed: 0.39, green: 0.90, blue: 0.77, alpha: 1),
+            mono: true
+        )
         let spacer = NSView()
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
         let save = NSButton(title: "Save to Library", target: self, action: #selector(save))

@@ -50,6 +50,32 @@ html[data-theme="dark"] {
   --cp-sheen: rgba(255, 255, 255, 0.04);
   --cp-highlight: rgba(253, 142, 161, 0.12);
 }
+html[data-skin="tech"] {
+  color-scheme: dark;
+  --cp-bg: #08172b;
+  --cp-bg-elevated: #0d213b;
+  --cp-surface: #122743;
+  --cp-surface-soft: #193251;
+  --cp-border: #31506f;
+  --cp-border-strong: #55c9e8;
+  --cp-text: #f8fbff;
+  --cp-text-muted: #aec5df;
+  --cp-text-soft: #d2e2f2;
+  --cp-accent: #52d8f2;
+  --cp-accent-hover: #75e5f7;
+  --cp-accent-soft: rgba(82, 216, 242, 0.16);
+  --cp-accent-fg: #061526;
+  --cp-success: #63e5c5;
+  --cp-danger: #ff718b;
+  --cp-warning: #ffc857;
+  --cp-link: #a99df7;
+  --cp-shadow: 0 20px 52px rgba(2, 11, 27, 0.42);
+  --cp-overlay: rgba(4, 14, 29, 0.84);
+  --cp-panel: rgba(18, 39, 67, 0.92);
+  --cp-panel-strong: rgba(13, 33, 59, 0.98);
+  --cp-sheen: rgba(255, 255, 255, 0.1);
+  --cp-highlight: rgba(99, 229, 197, 0.16);
+}
 
 * { box-sizing: border-box; }
 body {
@@ -58,6 +84,12 @@ body {
   background: var(--cp-bg);
   color: var(--cp-text);
   font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+html[data-skin="tech"] body {
+  background:
+    radial-gradient(circle at 82% 10%, rgba(82, 216, 242, 0.17), transparent 30%),
+    radial-gradient(circle at 12% 82%, rgba(169, 157, 247, 0.14), transparent 34%),
+    var(--cp-bg);
 }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
@@ -77,6 +109,21 @@ button { cursor: pointer; }
   color: var(--cp-accent-fg);
 }
 .button.primary:hover { background: var(--cp-accent-hover); }
+html[data-skin="tech"] .button {
+  border-color: var(--cp-border);
+  background: rgba(25, 50, 81, 0.82);
+  box-shadow: inset 0 1px 0 var(--cp-sheen);
+}
+html[data-skin="tech"] .button:hover {
+  border-color: var(--cp-accent);
+  background: rgba(37, 73, 109, 0.94);
+}
+html[data-skin="tech"] .button.primary {
+  border-color: transparent;
+  background: linear-gradient(100deg, var(--cp-accent), var(--cp-success), var(--cp-link));
+  color: var(--cp-accent-fg);
+  box-shadow: 0 10px 26px rgba(82, 216, 242, 0.2);
+}
 .button.danger {
   border-color: var(--cp-danger);
   background: var(--cp-surface);
@@ -89,6 +136,13 @@ input, select, textarea {
   outline: none;
   background: var(--cp-surface);
   color: var(--cp-text);
+}
+html[data-skin="tech"] input,
+html[data-skin="tech"] select,
+html[data-skin="tech"] textarea {
+  border-color: var(--cp-border);
+  background: rgba(8, 23, 43, 0.72);
+  box-shadow: inset 0 1px 0 var(--cp-sheen);
 }
 input:focus, select:focus, textarea:focus {
   border-color: var(--cp-accent);

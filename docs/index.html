@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark" data-skin="tech">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,8 +7,7 @@
   <script>
     (() => {
       const param = new URLSearchParams(window.location.search).get("scoutTheme");
-      const theme =
-        param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      const theme = param || "dark";
       document.documentElement.setAttribute("data-theme", theme);
     })();
   </script>
@@ -65,120 +64,250 @@
       --cp-sheen: rgba(255, 255, 255, 0.04);
       --cp-highlight: rgba(253, 142, 161, 0.12);
     }
+    html[data-skin="tech"] {
+      --cp-bg: #08172b;
+      --cp-bg-elevated: #0d213b;
+      --cp-surface: #122743;
+      --cp-surface-soft: #193251;
+      --cp-border: #31506f;
+      --cp-border-strong: #52d8f2;
+      --cp-text: #f8fbff;
+      --cp-text-muted: #aec5df;
+      --cp-text-soft: #d2e2f2;
+      --cp-accent: #52d8f2;
+      --cp-accent-hover: #75e5f7;
+      --cp-accent-soft: rgba(82, 216, 242, 0.16);
+      --cp-accent-fg: #061526;
+      --cp-success: #63e5c5;
+      --cp-danger: #ff718b;
+      --cp-warning: #ffc857;
+      --cp-link: #a99df7;
+      --cp-shadow: 0 22px 56px rgba(2, 11, 27, 0.44);
+      --cp-overlay: rgba(4, 14, 29, 0.84);
+      --cp-panel: rgba(18, 39, 67, 0.92);
+      --cp-panel-strong: rgba(13, 33, 59, 0.98);
+      --cp-sheen: rgba(255, 255, 255, 0.1);
+      --cp-highlight: rgba(99, 229, 197, 0.16);
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: var(--cp-bg);
+      background:
+        radial-gradient(circle at 85% 12%, var(--cp-accent-soft), transparent 30%),
+        radial-gradient(circle at 10% 82%, var(--cp-highlight), transparent 32%),
+        var(--cp-bg);
       color: var(--cp-text);
       font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
     }
     a { color: inherit; text-decoration: none; }
-    .wrap { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+    .wrap { width: min(1240px, calc(100% - 36px)); margin: 0 auto; }
     nav {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 20px 0;
+      padding: 24px 0;
     }
-    .brand { font-weight: 800; letter-spacing: 0.02em; }
-    .nav-links { display: flex; gap: 16px; color: var(--cp-text-muted); }
+    .brand { font-weight: 900; letter-spacing: 0.08em; }
+    .nav-links { display: flex; align-items: center; gap: 18px; color: var(--cp-text-muted); }
+    .lang {
+      padding: 7px 13px;
+      border: 1px solid var(--cp-accent);
+      border-radius: 999px;
+      color: var(--cp-accent);
+      font-weight: 800;
+    }
     .hero {
+      position: relative;
       display: grid;
-      grid-template-columns: 1.2fr 0.8fr;
-      gap: 42px;
+      grid-template-columns: 1.08fr 0.92fr;
+      gap: 52px;
       align-items: center;
-      padding: 76px 0 88px;
+      min-height: 690px;
+      margin: 4px auto 64px;
+      padding: 64px 70px;
+      overflow: hidden;
+      border: 1px solid var(--cp-border);
+      border-radius: 34px;
+      background: linear-gradient(125deg, var(--cp-bg-elevated), var(--cp-surface), var(--cp-bg));
+      box-shadow: var(--cp-shadow), inset 0 1px 0 var(--cp-sheen);
     }
-    .eyebrow {
-      color: var(--cp-link);
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 18px;
+      border: 1px solid var(--cp-border);
+      border-radius: 999px;
+      background: var(--cp-surface-soft);
       font-family: Consolas, "Courier New", Courier, monospace;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.15em;
+      font-weight: 800;
+      letter-spacing: 0.12em;
     }
-    h1 { margin: 14px 0 18px; font-size: clamp(42px, 7vw, 76px); line-height: 0.98; }
-    .lead { max-width: 680px; color: var(--cp-text-soft); font-size: 19px; line-height: 1.7; }
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cp-success); }
+    h1 { margin: 28px 0 18px; font-size: clamp(48px, 7vw, 82px); line-height: 0.98; }
+    .gradient-text {
+      background: linear-gradient(100deg, var(--cp-accent), var(--cp-success), var(--cp-link));
+      background-clip: text;
+      color: transparent;
+    }
+    .tagline { margin: 0 0 16px; font-size: 24px; font-weight: 800; }
+    .lead { max-width: 660px; color: var(--cp-text-soft); font-size: 18px; line-height: 1.75; }
+    .callout {
+      margin: 28px 0;
+      padding: 16px 20px;
+      border-left: 5px solid var(--cp-accent);
+      border-radius: 0 18px 18px 0;
+      background: var(--cp-surface-soft);
+      color: var(--cp-text-soft);
+    }
+    .callout strong { display: block; color: var(--cp-text); }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; }
     .button {
-      padding: 12px 18px;
+      padding: 13px 20px;
       border: 1px solid var(--cp-border);
-      background: var(--cp-surface);
-      font-weight: 700;
+      border-radius: 999px;
+      background: var(--cp-surface-soft);
+      font-weight: 800;
     }
-    .button.primary { border-color: var(--cp-accent); background: var(--cp-accent); color: var(--cp-accent-fg); }
-    .terminal {
-      padding: 22px;
-      border: 1px solid var(--cp-link);
-      border-top: 5px solid var(--cp-accent);
-      background: var(--cp-surface);
-      box-shadow: 12px 12px 0 var(--cp-highlight);
-      font-family: Consolas, "Courier New", Courier, monospace;
-      clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
+    .button.primary {
+      border-color: transparent;
+      background: linear-gradient(100deg, var(--cp-accent), var(--cp-success), var(--cp-link));
+      color: var(--cp-accent-fg);
+      box-shadow: 0 12px 28px var(--cp-accent-soft);
     }
-    .terminal p { margin: 10px 0; color: var(--cp-text-muted); }
-    .terminal strong { color: var(--cp-success); }
-    .section { padding: 64px 0; border-top: 1px solid var(--cp-border); }
-    .section h2 { margin: 0 0 24px; font-size: 32px; }
-    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .orbit-panel {
+      position: relative;
+      display: grid;
+      min-height: 520px;
+      place-items: center;
+      border-radius: 28px;
+      background:
+        linear-gradient(var(--cp-border), var(--cp-border)) 0 20% / 100% 1px,
+        linear-gradient(90deg, var(--cp-border), var(--cp-border)) 20% 0 / 1px 100%;
+      background-color: var(--cp-bg-elevated);
+      background-size: 60px 60px;
+      box-shadow: inset 0 0 80px var(--cp-accent-soft);
+    }
+    .orbit, .orbit::before {
+      position: absolute;
+      border: 1px solid var(--cp-border-strong);
+      border-radius: 50%;
+      content: "";
+    }
+    .orbit { width: 390px; height: 390px; }
+    .orbit::before { inset: 42px; border-style: dashed; }
+    .core {
+      z-index: 2;
+      display: grid;
+      width: 176px;
+      height: 176px;
+      place-items: center;
+      padding: 24px;
+      border: 18px solid var(--cp-accent);
+      border-right-color: var(--cp-link);
+      border-bottom-color: var(--cp-success);
+      border-radius: 50%;
+      background: var(--cp-bg);
+      text-align: center;
+      font-size: 20px;
+      font-weight: 900;
+    }
+    .node {
+      position: absolute;
+      z-index: 3;
+      padding: 9px 16px;
+      border: 1px solid var(--cp-accent);
+      border-radius: 999px;
+      background: var(--cp-bg-elevated);
+      color: var(--cp-accent);
+      font-weight: 800;
+    }
+    .node:nth-of-type(1) { top: 44px; }
+    .node:nth-of-type(2) { top: 150px; right: 18px; color: var(--cp-success); border-color: var(--cp-success); }
+    .node:nth-of-type(3) { right: 18px; bottom: 100px; color: var(--cp-link); border-color: var(--cp-link); }
+    .node:nth-of-type(4) { bottom: 42px; }
+    .node:nth-of-type(5) { bottom: 100px; left: 18px; color: var(--cp-success); border-color: var(--cp-success); }
+    .node:nth-of-type(6) { top: 150px; left: 18px; color: var(--cp-link); border-color: var(--cp-link); }
+    .section { padding: 76px 0; }
+    .section-head { max-width: 720px; margin-bottom: 28px; }
+    .section h2 { margin: 0 0 12px; font-size: 38px; }
+    .section p { color: var(--cp-text-muted); line-height: 1.7; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
     .card {
-      padding: 22px;
+      min-height: 190px;
+      padding: 24px;
       border: 1px solid var(--cp-border);
-      border-top: 4px solid var(--cp-link);
-      background: var(--cp-surface);
+      border-radius: 24px;
+      background: linear-gradient(145deg, var(--cp-surface-soft), var(--cp-surface));
+      box-shadow: inset 0 1px 0 var(--cp-sheen);
     }
-    .card:nth-child(2n) { border-top-color: var(--cp-success); }
-    .card:nth-child(3n) { border-top-color: var(--cp-accent); }
+    .icon {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      margin-bottom: 16px;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--cp-accent-soft);
+      color: var(--cp-accent);
+      font-weight: 900;
+    }
+    .card:nth-child(2n) .icon { color: var(--cp-success); }
+    .card:nth-child(3n) .icon { color: var(--cp-link); }
     .card h3 { margin: 0 0 10px; }
-    .card p { margin: 0; color: var(--cp-text-muted); line-height: 1.6; }
-    footer { padding: 36px 0; color: var(--cp-text-muted); border-top: 1px solid var(--cp-border); }
-    @media (max-width: 760px) {
-      .hero, .grid { grid-template-columns: 1fr; }
-      .hero { padding-top: 40px; }
-      .nav-links { display: none; }
+    .card p { margin: 0; }
+    footer { padding: 38px 0; color: var(--cp-text-muted); border-top: 1px solid var(--cp-border); }
+    @media (max-width: 860px) {
+      .hero { grid-template-columns: 1fr; padding: 42px 28px; }
+      .orbit-panel { min-height: 440px; }
+      .grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 580px) {
+      .nav-links a:not(.lang) { display: none; }
+      .hero { min-height: auto; border-radius: 24px; }
+      .orbit-panel { display: none; }
+      .grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <nav class="wrap">
     <div class="brand">AI KNOWLEDGE INBOX</div>
-    <div class="nav-links"><a href="#features">功能</a><a href="#privacy">隐私</a><a href="https://github.com/lfeng_microsoft/ai-knowledge-inbox">GitHub</a></div>
+    <div class="nav-links"><a href="#features">功能</a><a href="#privacy">隐私</a><a href="https://github.com/lindaf0617-hub/ai-knowledge-inbox">GitHub</a><a class="lang" href="en/">EN</a></div>
   </nav>
   <main>
     <section class="hero wrap">
       <div>
-        <div class="eyebrow">PRIVATE KNOWLEDGE OS // WINDOWS + macOS + BROWSER</div>
-        <h1>让每次 AI 对话<br>成为长期资产</h1>
+        <div class="badge"><span class="dot"></span>LOCAL-FIRST AI PROJECT</div>
+        <h1>让每次 AI 对话<br><span class="gradient-text">成为长期资产</span></h1>
+        <p class="tagline">Save once. Retrieve, cite, and build forever.</p>
         <p class="lead">一键保存 Copilot、ChatGPT、Claude 和网页内容，在本地搜索、整理、引用，并通过自己的 OneDrive 跨设备同步。</p>
+        <div class="callout"><strong>从“使用 AI”到“拥有自己的 AI 知识系统”</strong>跨工具采集 · 本地优先 · 引用式 Ask · 用户自有同步</div>
         <div class="actions">
-          <a class="button primary" href="https://github.com/lfeng_microsoft/ai-knowledge-inbox/releases/latest">下载最新版</a>
-          <a class="button" href="https://github.com/lfeng_microsoft/ai-knowledge-inbox">查看源码</a>
+          <a class="button primary" href="https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/tag/v1.6.0">下载 v1.6.0 Beta</a>
+          <a class="button" href="https://github.com/lindaf0617-hub/ai-knowledge-inbox">查看源码</a>
         </div>
       </div>
-      <div class="terminal">
-        <p>&gt; capture --source copilot</p>
-        <p><strong>saved</strong> 1 knowledge item</p>
-        <p>&gt; ask "整合 Agent 安全方案"</p>
-        <p><strong>retrieved</strong> K1, K2, K3</p>
-        <p><strong>answer</strong> generated with citations</p>
-        <p>&gt; sync --target onedrive</p>
-        <p><strong>synced</strong> private knowledge</p>
+      <div class="orbit-panel">
+        <div class="orbit"></div>
+        <div class="node">CAPTURE</div><div class="node">ORGANIZE</div><div class="node">ASK</div>
+        <div class="node">SYNC</div><div class="node">CITE</div><div class="node">REUSE</div>
+        <div class="core">PRIVATE<br>KNOWLEDGE<br>OS</div>
       </div>
     </section>
-    <section class="section" id="features">
-      <div class="wrap">
-        <h2>从采集到再利用</h2>
-        <div class="grid">
-          <article class="card"><h3>桌面一键采集</h3><p>Windows 按 Ctrl + ;，macOS 按 Command + ;，从桌面 AI 应用快速保存。</p></article>
-          <article class="card"><h3>网页选区保存</h3><p>Edge/Chrome 右键采集，保留标题、链接、列表与代码块。</p></article>
-          <article class="card"><h3>Ask 知识库</h3><p>本地检索相关知识，由浏览器内置 AI 生成带引用的回答。</p></article>
-          <article class="card"><h3>本地优先</h3><p>SQLite 主库、本机语义向量和无托管后端设计。</p></article>
-          <article class="card"><h3>OneDrive 同步</h3><p>使用自己的 OneDrive，在设备间合并更新与删除。</p></article>
-          <article class="card"><h3>开放格式</h3><p>导出 Markdown 和 JSON，可迁移到 Obsidian 等工具。</p></article>
-        </div>
+    <section class="section wrap" id="features">
+      <div class="section-head"><h2>从采集到再利用</h2><p>一个入口保存所有 AI 产出，一个知识层服务未来的每个 Agent。</p></div>
+      <div class="grid">
+        <article class="card"><div class="icon">＋</div><h3>桌面一键采集</h3><p>Windows 按 Ctrl + ;，macOS 按 Command + ;。</p></article>
+        <article class="card"><div class="icon">✓</div><h3>网页选区保存</h3><p>Edge / Chrome 右键采集，保留 Markdown 和来源。</p></article>
+        <article class="card"><div class="icon">A</div><h3>Ask 知识库</h3><p>本地检索后由浏览器内置 AI 生成带引用回答。</p></article>
+        <article class="card"><div class="icon">L</div><h3>本地优先</h3><p>SQLite 主库、本机向量、无托管知识后端。</p></article>
+        <article class="card"><div class="icon">↻</div><h3>OneDrive 同步</h3><p>使用自己的 OneDrive 合并多设备更新与删除。</p></article>
+        <article class="card"><div class="icon">M</div><h3>开放格式</h3><p>导出 Markdown 和 JSON，可迁移到 Obsidian。</p></article>
       </div>
     </section>
-    <section class="section" id="privacy">
-      <div class="wrap"><h2>你的知识，由你控制</h2><p class="lead">没有托管数据库、广告或遥测。桌面服务只监听本机地址，普通网页不能访问。公开提交问题时，请勿附带私密知识正文。</p></div>
+    <section class="section wrap" id="privacy">
+      <div class="section-head"><h2>你的知识，由你控制</h2><p>没有托管数据库、广告或遥测。桌面服务只监听本机地址，普通网页不能访问。</p></div>
     </section>
   </main>
   <footer><div class="wrap">AI Knowledge Inbox · MIT License</div></footer>

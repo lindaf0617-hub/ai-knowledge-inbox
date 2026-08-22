@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0
+
+- Redesigned Technology Skin 2 with navy, cyan, mint, and lilac highlights.
+- Increased bright surfaces, gradients, and rounded-card geometry across desktop and HTML.
+- Added a dedicated English README and English GitHub Pages site.
+- Fixed Windows high-DPI capture-window sizing.
+
 ## 1.5.0
 
 - Added Chinese / English browser UI.

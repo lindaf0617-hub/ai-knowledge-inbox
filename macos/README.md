@@ -13,7 +13,7 @@ The macOS companion is a native AppKit menu-bar application.
 Run on macOS 14 with Xcode command-line tools:
 
 ```bash
-bash scripts/build-macos.sh 1.5.0
+bash scripts/build-macos.sh 1.6.0
 ```
 
 The script:

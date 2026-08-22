@@ -1,5 +1,5 @@
 const KnowledgeStore = (() => {
-  const API_BASE = "http://127.0.0.1:43127";
+  const API_BASE = globalThis.__AI_KNOWLEDGE_API_BASE || "http://127.0.0.1:43127";
   let backend = "unknown";
   let migrationPromise = null;
 

@@ -8,7 +8,7 @@ const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
 const HOST = "127.0.0.1";
-const PORT = 43127;
+const PORT = Number(process.env.AI_KNOWLEDGE_PORT || 43127);
 const DATA_DIR =
   process.env.AI_KNOWLEDGE_DATA_DIR ||
   (process.platform === "win32"

@@ -170,7 +170,7 @@ function relatedEntries(current) {
 }
 
 function sourceName(source) {
-  if (!source) return "手动录入";
+  if (!source) return I18n.t("手动录入");
   try {
     const hostname = new URL(source).hostname.replace(/^www\./, "");
     if (/chatgpt|openai/.test(hostname)) return "ChatGPT";
@@ -178,7 +178,7 @@ function sourceName(source) {
     if (/claude|anthropic/.test(hostname)) return "Claude";
     return hostname;
   } catch {
-    return "其他来源";
+    return I18n.t("其他来源");
   }
 }
 
@@ -257,7 +257,7 @@ function fillSelect(select, defaultLabel, values, selected) {
   select.replaceChildren();
   const defaultOption = document.createElement("option");
   defaultOption.value = "";
-  defaultOption.textContent = defaultLabel;
+  defaultOption.textContent = I18n.t(defaultLabel);
   select.append(defaultOption);
   values.forEach(value => {
     const option = document.createElement("option");
