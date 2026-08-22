@@ -1,0 +1,410 @@
+import AppKit
+import Carbon
+import Foundation
+
+private let serviceURL = URL(string: "http://127.0.0.1:43127")!
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private var statusItem: NSStatusItem!
+    private var hotKeyRef: EventHotKeyRef?
+    private var eventHandler: EventHandlerRef?
+    private var serviceProcess: Process?
+    private var captureWindow: NSWindow?
+    private var captureController: CaptureWindowController?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        do {
+            try startService()
+            configureStatusItem()
+            try registerHotKey()
+            notify(title: "AI Knowledge Companion", text: "Copy AI content and press Command + ;")
+        } catch {
+            showError(error.localizedDescription)
+            NSApp.terminate(nil)
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
+        if let eventHandler { RemoveEventHandler(eventHandler) }
+        if let process = serviceProcess, process.isRunning { process.terminate() }
+    }
+
+    private func configureStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = statusItem.button {
+            button.title = "AI"
+            button.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
+            button.toolTip = "AI Knowledge Companion — Command + ;"
+        }
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Save Clipboard (Command + ;)", action: #selector(showCapture), keyEquivalent: "")
+        menu.addItem(withTitle: "Open Knowledge Data", action: #selector(openDataFolder), keyEquivalent: "")
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "q")
+        menu.items.forEach { $0.target = self }
+        statusItem.menu = menu
+    }
+
+    private func registerHotKey() throws {
+        var hotKeyID = EventHotKeyID(signature: OSType(0x41494B42), id: 1)
+        let result = RegisterEventHotKey(
+            UInt32(kVK_ANSI_Semicolon),
+            UInt32(cmdKey),
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+        guard result == noErr else {
+            throw CompanionError.message("Command + ; is already used by another app.")
+        }
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        let pointer = Unmanaged.passUnretained(self).toOpaque()
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            { _, _, userData in
+                guard let userData else { return noErr }
+                let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
+                DispatchQueue.main.async { delegate.showCapture() }
+                return noErr
+            },
+            1,
+            &eventType,
+            pointer,
+            &eventHandler
+        )
+    }
+
+    private func startService() throws {
+        if serviceIsHealthy() { return }
+        guard
+            let resources = Bundle.main.resourceURL,
+            let server = Bundle.main.url(forResource: "server", withExtension: "js"),
+            let node = bundledNodeURL(resources: resources)
+        else {
+            throw CompanionError.message("Bundled local service files are missing.")
+        }
+
+        let dataDirectory = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AIKnowledgeInbox", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: dataDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let process = Process()
+        process.executableURL = node
+        process.arguments = [server.path]
+        var environment = ProcessInfo.processInfo.environment
+        environment["AI_KNOWLEDGE_DATA_DIR"] = dataDirectory.path
+        if let oneDrive = findOneDriveFolder() {
+            environment["AI_KNOWLEDGE_ONEDRIVE"] = oneDrive.path
+        }
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        serviceProcess = process
+
+        for _ in 0..<25 {
+            Thread.sleep(forTimeInterval: 0.2)
+            if serviceIsHealthy() { return }
+            if !process.isRunning { break }
+        }
+        throw CompanionError.message("The local knowledge service failed to start.")
+    }
+
+    private func bundledNodeURL(resources: URL) -> URL? {
+        #if arch(arm64)
+        return resources.appendingPathComponent("node-arm64")
+        #else
+        return resources.appendingPathComponent("node-x64")
+        #endif
+    }
+
+    private func findOneDriveFolder() -> URL? {
+        let cloudStorage = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/CloudStorage", isDirectory: true)
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: cloudStorage,
+            includingPropertiesForKeys: nil
+        ) else { return nil }
+        return children
+            .filter { $0.lastPathComponent.lowercased().hasPrefix("onedrive") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .first
+    }
+
+    private func serviceIsHealthy() -> Bool {
+        var request = URLRequest(url: serviceURL.appendingPathComponent("health"))
+        request.timeoutInterval = 0.6
+        let semaphore = DispatchSemaphore(value: 0)
+        var healthy = false
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            healthy = (response as? HTTPURLResponse)?.statusCode == 200
+            semaphore.signal()
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 1)
+        return healthy
+    }
+
+    @objc private func showCapture() {
+        guard captureWindow == nil else {
+            captureWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let text = NSPasteboard.general.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !text.isEmpty else {
+            notify(title: "Nothing to save", text: "Copy text in an AI app first.")
+            return
+        }
+
+        let controller = CaptureWindowController(content: text) { [weak self] payload in
+            self?.save(payload: payload)
+        }
+        captureController = controller
+        captureWindow = controller.window
+        captureWindow?.delegate = self
+        captureWindow?.center()
+        captureWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        captureWindow = nil
+        captureController = nil
+    }
+
+    private func save(payload: EntryPayload) {
+        guard let body = try? JSONEncoder().encode(payload) else { return }
+        var request = URLRequest(url: serviceURL.appendingPathComponent("entries"))
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error {
+                    self?.showError(error.localizedDescription)
+                    return
+                }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if !(200..<300).contains(status) {
+                    let message = data.flatMap { try? JSONDecoder().decode(APIError.self, from: $0).error }
+                        ?? "Save failed."
+                    self?.showError(message)
+                    return
+                }
+                self?.captureWindow?.close()
+                self?.notify(title: "Saved", text: "Clipboard content was added to your library.")
+            }
+        }.resume()
+    }
+
+    @objc private func openDataFolder() {
+        let url = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AIKnowledgeInbox", isDirectory: true)
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func quit() { NSApp.terminate(nil) }
+
+    private func notify(title: String, text: String) {
+        let notification = NSUserNotification()
+        notification.title = title
+        notification.informativeText = text
+        NSUserNotificationCenter.default.deliver(notification)
+    }
+
+    private func showError(_ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "AI Knowledge Companion"
+        alert.informativeText = message
+        alert.runModal()
+    }
+}
+
+final class CaptureWindowController: NSWindowController {
+    private let titleField = NSTextField()
+    private let contentView = NSTextView()
+    private let projectField = NSTextField()
+    private let tagsField = NSTextField()
+    private let saveHandler: (EntryPayload) -> Void
+
+    init(content: String, saveHandler: @escaping (EntryPayload) -> Void) {
+        self.saveHandler = saveHandler
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 650),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.backgroundColor = NSColor(calibratedWhite: 0.16, alpha: 1)
+        window.isReleasedWhenClosed = false
+        super.init(window: window)
+        buildUI(content: content)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    private func buildUI(content: String) {
+        guard let root = window?.contentView else { return }
+        let accent = NSColor(calibratedRed: 0.99, green: 0.56, blue: 0.63, alpha: 1)
+        let link = NSColor(calibratedRed: 0.30, green: 0.65, blue: 1, alpha: 1)
+        let text = NSColor(calibratedWhite: 0.87, alpha: 1)
+        let muted = NSColor(calibratedWhite: 0.68, alpha: 1)
+        let surface = NSColor(calibratedWhite: 0.18, alpha: 1)
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 14
+        stack.edgeInsets = NSEdgeInsets(top: 26, left: 28, bottom: 24, right: 28)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: root.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor)
+        ])
+
+        let system = label("CAPTURE NODE // COPILOT CLIPBOARD", size: 11, color: link, mono: true)
+        let heading = label("Save to AI Knowledge Inbox", size: 25, color: text, weight: .semibold)
+        let subtitle = label("Review the clipboard content before committing it to your library.", size: 13, color: muted)
+        stack.addArrangedSubview(system)
+        stack.addArrangedSubview(heading)
+        stack.addArrangedSubview(subtitle)
+
+        let divider = NSBox()
+        divider.boxType = .separator
+        divider.borderColor = accent
+        stack.addArrangedSubview(divider)
+
+        titleField.stringValue = content.split(separator: "\n").first.map(String.init) ?? "Untitled knowledge"
+        titleField.placeholderString = "Title"
+        styleField(titleField, surface: surface, text: text)
+        stack.addArrangedSubview(fieldGroup("TITLE", control: titleField, color: muted))
+
+        contentView.string = content
+        contentView.font = NSFont.systemFont(ofSize: 14)
+        contentView.textColor = text
+        contentView.backgroundColor = NSColor(calibratedWhite: 0.13, alpha: 1)
+        contentView.isRichText = false
+        contentView.textContainerInset = NSSize(width: 10, height: 10)
+        let scroll = NSScrollView()
+        scroll.documentView = contentView
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .lineBorder
+        scroll.heightAnchor.constraint(equalToConstant: 300).isActive = true
+        stack.addArrangedSubview(fieldGroup("CONTENT", control: scroll, color: muted))
+
+        let metadata = NSStackView()
+        metadata.orientation = .horizontal
+        metadata.spacing = 12
+        styleField(projectField, surface: surface, text: text)
+        styleField(tagsField, surface: surface, text: text)
+        projectField.placeholderString = "Project"
+        tagsField.placeholderString = "Tags, comma separated"
+        metadata.addArrangedSubview(fieldGroup("PROJECT", control: projectField, color: muted))
+        metadata.addArrangedSubview(fieldGroup("TAGS", control: tagsField, color: muted))
+        metadata.distribution = .fillEqually
+        stack.addArrangedSubview(metadata)
+
+        let footer = NSStackView()
+        footer.orientation = .horizontal
+        let status = label("SYSTEM ONLINE // SQLITE LOCAL // ONEDRIVE SYNC", size: 11, color: .systemGreen, mono: true)
+        let spacer = NSView()
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
+        let save = NSButton(title: "Save to Library", target: self, action: #selector(save))
+        save.bezelColor = accent
+        footer.addArrangedSubview(status)
+        footer.addArrangedSubview(spacer)
+        footer.addArrangedSubview(cancel)
+        footer.addArrangedSubview(save)
+        stack.addArrangedSubview(footer)
+    }
+
+    private func label(
+        _ value: String,
+        size: CGFloat,
+        color: NSColor,
+        weight: NSFont.Weight = .regular,
+        mono: Bool = false
+    ) -> NSTextField {
+        let field = NSTextField(labelWithString: value)
+        field.textColor = color
+        field.font = mono
+            ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+            : NSFont.systemFont(ofSize: size, weight: weight)
+        return field
+    }
+
+    private func styleField(_ field: NSTextField, surface: NSColor, text: NSColor) {
+        field.isBezeled = true
+        field.bezelStyle = .squareBezel
+        field.drawsBackground = true
+        field.backgroundColor = surface
+        field.textColor = text
+        field.font = NSFont.systemFont(ofSize: 14)
+    }
+
+    private func fieldGroup(_ title: String, control: NSView, color: NSColor) -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.spacing = 6
+        stack.addArrangedSubview(label(title, size: 11, color: color, weight: .bold, mono: true))
+        stack.addArrangedSubview(control)
+        return stack
+    }
+
+    @objc private func cancel() { window?.close() }
+
+    @objc private func save() {
+        let content = contentView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { NSSound.beep(); return }
+        let tags = tagsField.stringValue
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        saveHandler(EntryPayload(
+            title: titleField.stringValue,
+            content: content,
+            source: "https://copilot.microsoft.com/",
+            project: projectField.stringValue,
+            tags: tags
+        ))
+    }
+}
+
+struct EntryPayload: Codable {
+    let title: String
+    let content: String
+    let source: String
+    let project: String
+    let tags: [String]
+}
+
+struct APIError: Codable { let error: String }
+
+enum CompanionError: LocalizedError {
+    case message(String)
+    var errorDescription: String? {
+        switch self { case .message(let value): return value }
+    }
+}
+
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()

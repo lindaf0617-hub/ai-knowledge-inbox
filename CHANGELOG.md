@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+
+- Added Chinese / English browser UI.
+- Added a native macOS menu-bar companion with `Command + ;`.
+- Applied Technology Skin 2 to Windows desktop capture.
+- Added complete project, hackathon, and Agent roadmap documentation.
+- Simplified public README and release notes.
+
 ## 1.4.0
 
 - Added grounded Ask with hybrid retrieval, browser built-in AI, citations, answer modes, and save-back.

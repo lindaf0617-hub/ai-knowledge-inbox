@@ -35,6 +35,7 @@ $forbidden = @(
 )
 $files = Get-ChildItem $repoRoot -Recurse -File | Where-Object {
     $_.FullName -notmatch "\\.git\\" -and
+    $_.FullName -notmatch "\\dist\\" -and
     $_.FullName -ne $validatorPath -and
     $_.Extension -notin @(".png", ".ico")
 }
@@ -49,5 +50,18 @@ foreach ($pattern in $forbidden) {
 $manifest = Get-Content -Raw (Join-Path $repoRoot "extension\manifest.json") | ConvertFrom-Json
 if ($manifest.manifest_version -ne 3) {
     throw "Extension must use Manifest V3."
+}
+foreach ($required in @(
+    "extension\ask.html",
+    "extension\i18n.js",
+    "macos\Sources\AIKnowledgeCompanion\main.swift",
+    "scripts\build-macos.sh",
+    "HACKATHON.md",
+    "PROJECT_RECORD.md",
+    "AGENT_ROADMAP.md"
+)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $required))) {
+        throw "Required release file is missing: $required"
+    }
 }
 Write-Output "Validation passed for version $($manifest.version)."

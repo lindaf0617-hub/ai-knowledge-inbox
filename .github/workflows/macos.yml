@@ -1,0 +1,23 @@
+name: Validate macOS
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+    paths:
+      - "macos/**"
+      - "desktop/server.js"
+      - "scripts/build-macos.sh"
+      - ".github/workflows/macos.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build unsigned macOS package
+        run: bash scripts/build-macos.sh 1.5.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-package
+          path: dist/*macOS-unsigned.dmg

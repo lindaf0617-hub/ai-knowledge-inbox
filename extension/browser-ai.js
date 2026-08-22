@@ -61,7 +61,7 @@ const BrowserAI = (() => {
     return availability(model);
   }
 
-  async function answer(question, sources, mode) {
+  async function answer(question, sources, mode, language = "zh") {
     const model = getLanguageModel();
     if (!model || typeof model.create !== "function") {
       throw new Error("当前浏览器未启用内置 AI，请使用支持 Prompt API 的 Chrome/Edge 版本");
@@ -106,6 +106,7 @@ const BrowserAI = (() => {
       });
       const prompt = [
         `任务模式：${modeInstructions[mode] || modeInstructions.synthesize}`,
+        `回答语言：${language === "en" ? "English" : "简体中文"}`,
         `用户问题：${String(question || "").slice(0, 1200)}`,
         "",
         "可用知识来源：",

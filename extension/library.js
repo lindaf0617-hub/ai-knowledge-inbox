@@ -7,6 +7,7 @@ const state = {
   sortOrder: "newest",
   activeId: null
 };
+I18n.bindPicker(document.getElementById("languagePicker"));
 
 const elements = {
   grid: document.getElementById("grid"),
@@ -155,9 +156,11 @@ function relatedEntries(current) {
       const sameProject = Boolean(current.project && entry.project === current.project);
       const score = (sameProject ? 8 : 0) + sharedTags.length * 5 + tokenScore;
       const reasons = [];
-      if (sameProject) reasons.push(`同项目：${current.project}`);
-      if (sharedTags.length) reasons.push(`共同标签：${sharedTags.join("、")}`);
-      if (!reasons.length && sharedTokenCount >= 2) reasons.push("内容主题相近");
+      if (sameProject) reasons.push(I18n.t(`同项目：${current.project}`));
+      if (sharedTags.length) reasons.push(I18n.t(`共同标签：${sharedTags.join("、")}`));
+      if (!reasons.length && sharedTokenCount >= 2) {
+        reasons.push(I18n.getLanguage() === "en" ? "Similar topic" : "内容主题相近");
+      }
       return { entry, score, reason: reasons.join(" · ") };
     })
     .filter(item => item.score >= 2 && item.reason)
@@ -203,8 +206,8 @@ function updateBackendStatus() {
   const mode = KnowledgeStore.currentBackend();
   elements.backendStatus.className = `backend-status ${mode}`;
   elements.backendStatus.textContent = mode === "server"
-    ? "共享 SQLite 已连接"
-    : "浏览器本地模式";
+    ? I18n.t("共享 SQLite 已连接")
+    : I18n.t("浏览器本地模式");
   elements.backendStatus.title = mode === "server"
     ? "浏览器扩展与桌面伴侣正在使用同一本地数据库"
     : "启动桌面伴侣后，本地数据会自动迁移到共享数据库";
@@ -214,20 +217,20 @@ function formatSyncStatus(status) {
   elements.syncStatus.className = `sync-line${status.status === "error" ? " error" : ""}`;
   elements.syncStatus.title = status.path || "";
   if (!status.enabled) {
-    elements.syncStatus.textContent = status.lastError || "OneDrive 同步未启用";
+    elements.syncStatus.textContent = I18n.t(status.lastError || "OneDrive 同步未启用");
     return;
   }
   if (status.status === "syncing") {
-    elements.syncStatus.textContent = "OneDrive 正在同步…";
+    elements.syncStatus.textContent = I18n.t("OneDrive 正在同步…");
     return;
   }
   if (status.status === "error") {
-    elements.syncStatus.textContent = `OneDrive 同步失败：${status.lastError}`;
+    elements.syncStatus.textContent = I18n.t(`OneDrive 同步失败：${status.lastError}`);
     return;
   }
   elements.syncStatus.textContent = status.lastSyncAt
-    ? `OneDrive 已同步 · ${formatTime(status.lastSyncAt)}`
-    : "OneDrive 已启用，等待首次同步";
+    ? I18n.t(`OneDrive 已同步 · ${formatTime(status.lastSyncAt)}`)
+    : I18n.t("OneDrive 已启用，等待首次同步");
 }
 
 async function refreshSyncStatus() {
@@ -271,9 +274,9 @@ function render() {
   updateBackendStatus();
   const entries = filteredEntries();
   elements.grid.replaceChildren();
-  elements.count.textContent = state.query
+  elements.count.textContent = I18n.t(state.query
     ? `找到 ${entries.length} 条，共 ${state.entries.length} 条`
-    : `共 ${state.entries.length} 条`;
+    : `共 ${state.entries.length} 条`);
 
   if (!entries.length) {
     const empty = document.createElement("div");
@@ -286,6 +289,7 @@ function render() {
       : "在任意网页选中文字，右键保存到 AI 知识库。";
     empty.append(title, text);
     elements.grid.append(empty);
+    I18n.apply(elements.grid);
     return;
   }
 
@@ -302,7 +306,9 @@ function render() {
     footer.className = "card-footer";
     const meta = document.createElement("span");
     meta.className = "meta";
-    meta.textContent = `${formatTime(entry.createdAt)}${entry.viewCount ? ` · 预览 ${entry.viewCount}` : ""}`;
+    meta.textContent = `${formatTime(entry.createdAt)}${
+      entry.viewCount ? ` · ${I18n.t(`预览 ${entry.viewCount}`)}` : ""
+    }`;
     const actions = document.createElement("div");
     const exportButton = document.createElement("button");
     exportButton.className = "text-button preview-button";
@@ -332,6 +338,7 @@ function render() {
     card.append(preview, footer);
     elements.grid.append(card);
   });
+  I18n.apply(elements.grid);
 }
 
 function createTaxonomy(entry) {
@@ -354,7 +361,9 @@ function createTaxonomy(entry) {
 
 function openEditor(entry) {
   state.activeId = entry.id;
-  elements.editMeta.textContent = `创建于 ${formatTime(entry.createdAt)}${entry.updatedAt ? ` · 更新于 ${formatTime(entry.updatedAt)}` : ""}`;
+  elements.editMeta.textContent = I18n.getLanguage() === "en"
+    ? `Created ${formatTime(entry.createdAt)}${entry.updatedAt ? ` · Updated ${formatTime(entry.updatedAt)}` : ""}`
+    : `创建于 ${formatTime(entry.createdAt)}${entry.updatedAt ? ` · 更新于 ${formatTime(entry.updatedAt)}` : ""}`;
   elements.editTitle.value = entry.title;
   elements.editContent.value = entry.content;
   elements.editSummary.value = entry.summary;
@@ -407,7 +416,7 @@ async function removeEntry(id) {
 }
 
 function showToast(message) {
-  elements.toast.textContent = message;
+  elements.toast.textContent = I18n.t(message);
   elements.toast.classList.add("show");
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => elements.toast.classList.remove("show"), 2000);
@@ -643,3 +652,8 @@ document.addEventListener("visibilitychange", () => {
 
 refreshEntries();
 setInterval(refreshSyncStatus, 30_000);
+document.addEventListener("languagechange", () => {
+  render();
+  refreshSyncStatus();
+  I18n.apply();
+});

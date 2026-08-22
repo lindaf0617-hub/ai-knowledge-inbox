@@ -142,15 +142,16 @@ function Show-CaptureWindow {
     }
 
     $script:captureOpen = $true
-    $bg = [System.Drawing.ColorTranslator]::FromHtml("#F7F4EF")
-    $surface = [System.Drawing.ColorTranslator]::FromHtml("#FFFFFF")
-    $soft = [System.Drawing.ColorTranslator]::FromHtml("#F5F5F5")
-    $border = [System.Drawing.ColorTranslator]::FromHtml("#DEDEDE")
-    $text = [System.Drawing.ColorTranslator]::FromHtml("#242424")
-    $muted = [System.Drawing.ColorTranslator]::FromHtml("#5C5C5C")
-    $accent = [System.Drawing.ColorTranslator]::FromHtml("#B11F4B")
-    $accentHover = [System.Drawing.ColorTranslator]::FromHtml("#9A1A41")
-    $success = [System.Drawing.ColorTranslator]::FromHtml("#16803A")
+    $bg = [System.Drawing.ColorTranslator]::FromHtml("#343231")
+    $surface = [System.Drawing.ColorTranslator]::FromHtml("#292929")
+    $soft = [System.Drawing.ColorTranslator]::FromHtml("#2E2E2E")
+    $border = [System.Drawing.ColorTranslator]::FromHtml("#474747")
+    $text = [System.Drawing.ColorTranslator]::FromHtml("#DEDEDE")
+    $muted = [System.Drawing.ColorTranslator]::FromHtml("#B0B0B0")
+    $accent = [System.Drawing.ColorTranslator]::FromHtml("#FD8EA1")
+    $accentHover = [System.Drawing.ColorTranslator]::FromHtml("#FB7B91")
+    $success = [System.Drawing.ColorTranslator]::FromHtml("#4ADE80")
+    $link = [System.Drawing.ColorTranslator]::FromHtml("#4DA6FF")
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "Save to AI Knowledge Inbox"
@@ -158,7 +159,7 @@ function Show-CaptureWindow {
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "None"
     $form.TopMost = $true
-    $form.BackColor = $border
+    $form.BackColor = $link
     $form.Padding = New-Object System.Windows.Forms.Padding(1)
     $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
     $form.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
@@ -172,6 +173,11 @@ function Show-CaptureWindow {
     $header.Size = New-Object System.Drawing.Size(698, 86)
     $header.BackColor = $surface
 
+    $signalLine = New-Object System.Windows.Forms.Panel
+    $signalLine.Location = New-Object System.Drawing.Point(6, 83)
+    $signalLine.Size = New-Object System.Drawing.Size(692, 3)
+    $signalLine.BackColor = $link
+
     $accentBar = New-Object System.Windows.Forms.Panel
     $accentBar.Location = New-Object System.Drawing.Point(0, 0)
     $accentBar.Size = New-Object System.Drawing.Size(6, 86)
@@ -181,8 +187,8 @@ function Show-CaptureWindow {
     $logo.Location = New-Object System.Drawing.Point(24, 21)
     $logo.Size = New-Object System.Drawing.Size(44, 44)
     $logo.BackColor = $accent
-    $logo.ForeColor = [System.Drawing.Color]::White
-    $logo.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Bold)
+    $logo.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#1A1A1A")
+    $logo.Font = New-Object System.Drawing.Font("Consolas", 13, [System.Drawing.FontStyle]::Bold)
     $logo.Text = "AI"
     $logo.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
 
@@ -197,7 +203,9 @@ function Show-CaptureWindow {
     $subtitle.Location = New-Object System.Drawing.Point(86, 50)
     $subtitle.Size = New-Object System.Drawing.Size(500, 21)
     $subtitle.ForeColor = $muted
-    $subtitle.Text = "Review the clipboard content before adding it to your library."
+    $subtitle.Font = New-Object System.Drawing.Font("Consolas", 8.5)
+    $subtitle.ForeColor = $link
+    $subtitle.Text = "CAPTURE NODE // REVIEW BEFORE COMMIT"
 
     $closeButton = New-Object System.Windows.Forms.Button
     $closeButton.Location = New-Object System.Drawing.Point(646, 20)
@@ -216,15 +224,15 @@ function Show-CaptureWindow {
     $header.Add_MouseDown({ [WindowChrome]::Drag($form.Handle) })
     $heading.Add_MouseDown({ [WindowChrome]::Drag($form.Handle) })
     $subtitle.Add_MouseDown({ [WindowChrome]::Drag($form.Handle) })
-    $header.Controls.AddRange(@($accentBar, $logo, $heading, $subtitle, $closeButton))
+    $header.Controls.AddRange(@($accentBar, $signalLine, $logo, $heading, $subtitle, $closeButton))
 
     $sourceBadge = New-Object System.Windows.Forms.Label
     $sourceBadge.Location = New-Object System.Drawing.Point(24, 101)
     $sourceBadge.Size = New-Object System.Drawing.Size(145, 24)
-    $sourceBadge.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#F6E9ED")
+    $sourceBadge.BackColor = [System.Drawing.ColorTranslator]::FromHtml("#3A3033")
     $sourceBadge.ForeColor = $accent
-    $sourceBadge.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 8)
-    $sourceBadge.Text = "COPILOT CLIPBOARD"
+    $sourceBadge.Font = New-Object System.Drawing.Font("Consolas", 8, [System.Drawing.FontStyle]::Bold)
+    $sourceBadge.Text = "SOURCE // COPILOT"
     $sourceBadge.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
 
     $card = New-Object System.Windows.Forms.Panel
@@ -233,12 +241,17 @@ function Show-CaptureWindow {
     $card.BackColor = $surface
     $card.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 
+    $cardSignal = New-Object System.Windows.Forms.Panel
+    $cardSignal.Location = New-Object System.Drawing.Point(0, 0)
+    $cardSignal.Size = New-Object System.Drawing.Size(648, 3)
+    $cardSignal.BackColor = $success
+
     $titleLabel = New-Object System.Windows.Forms.Label
     $titleLabel.Text = "Title"
     $titleLabel.Location = New-Object System.Drawing.Point(22, 18)
     $titleLabel.AutoSize = $true
     $titleLabel.ForeColor = $muted
-    $titleLabel.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9)
+    $titleLabel.Font = New-Object System.Drawing.Font("Consolas", 9, [System.Drawing.FontStyle]::Bold)
 
     $titleBox = New-Object System.Windows.Forms.TextBox
     $titleBox.Location = New-Object System.Drawing.Point(22, 42)
@@ -254,12 +267,13 @@ function Show-CaptureWindow {
     $contentLabel.Location = New-Object System.Drawing.Point(22, 88)
     $contentLabel.AutoSize = $true
     $contentLabel.ForeColor = $muted
-    $contentLabel.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9)
+    $contentLabel.Font = New-Object System.Drawing.Font("Consolas", 9, [System.Drawing.FontStyle]::Bold)
 
     $countLabel = New-Object System.Windows.Forms.Label
     $countLabel.Location = New-Object System.Drawing.Point(480, 88)
     $countLabel.Size = New-Object System.Drawing.Size(146, 20)
     $countLabel.ForeColor = $muted
+    $countLabel.Font = New-Object System.Drawing.Font("Consolas", 8.5)
     $countLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
     $countLabel.Text = "$($clipboardText.Length) characters"
 
@@ -279,7 +293,7 @@ function Show-CaptureWindow {
     $projectLabel.Location = New-Object System.Drawing.Point(22, 365)
     $projectLabel.AutoSize = $true
     $projectLabel.ForeColor = $muted
-    $projectLabel.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9)
+    $projectLabel.Font = New-Object System.Drawing.Font("Consolas", 9, [System.Drawing.FontStyle]::Bold)
 
     $projectBox = New-Object System.Windows.Forms.TextBox
     $projectBox.Location = New-Object System.Drawing.Point(22, 389)
@@ -292,7 +306,7 @@ function Show-CaptureWindow {
     $tagsLabel.Location = New-Object System.Drawing.Point(338, 365)
     $tagsLabel.AutoSize = $true
     $tagsLabel.ForeColor = $muted
-    $tagsLabel.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9)
+    $tagsLabel.Font = New-Object System.Drawing.Font("Consolas", 9, [System.Drawing.FontStyle]::Bold)
 
     $tagsBox = New-Object System.Windows.Forms.TextBox
     $tagsBox.Location = New-Object System.Drawing.Point(338, 389)
@@ -301,11 +315,11 @@ function Show-CaptureWindow {
     $tagsBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 
     $privacyLabel = New-Object System.Windows.Forms.Label
-    $privacyLabel.Text = "Stored locally in SQLite  |  Synced through your OneDrive"
+    $privacyLabel.Text = "SYSTEM ONLINE  //  SQLITE LOCAL  //  ONEDRIVE SYNC"
     $privacyLabel.Location = New-Object System.Drawing.Point(24, 606)
     $privacyLabel.Size = New-Object System.Drawing.Size(425, 22)
     $privacyLabel.ForeColor = $success
-    $privacyLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $privacyLabel.Font = New-Object System.Drawing.Font("Consolas", 8.5, [System.Drawing.FontStyle]::Bold)
 
     $cancelButton = New-Object System.Windows.Forms.Button
     $cancelButton.Text = "Cancel"
@@ -315,7 +329,7 @@ function Show-CaptureWindow {
     $cancelButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $cancelButton.FlatAppearance.BorderColor = $border
     $cancelButton.FlatAppearance.BorderSize = 1
-    $cancelButton.BackColor = $surface
+    $cancelButton.BackColor = $soft
     $cancelButton.ForeColor = $text
     $cancelButton.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9.5)
     $cancelButton.Cursor = [System.Windows.Forms.Cursors]::Hand
@@ -327,7 +341,7 @@ function Show-CaptureWindow {
     $saveButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $saveButton.FlatAppearance.BorderSize = 0
     $saveButton.BackColor = $accent
-    $saveButton.ForeColor = [System.Drawing.Color]::White
+    $saveButton.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#1A1A1A")
     $saveButton.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9.5)
     $saveButton.Cursor = [System.Windows.Forms.Cursors]::Hand
     $saveButton.Add_MouseEnter({ if ($saveButton.Enabled) { $saveButton.BackColor = $accentHover } })
@@ -381,7 +395,7 @@ function Show-CaptureWindow {
     })
 
     $card.Controls.AddRange(@(
-        $titleLabel, $titleBox, $contentLabel, $countLabel, $contentBox,
+        $cardSignal, $titleLabel, $titleBox, $contentLabel, $countLabel, $contentBox,
         $projectLabel, $projectBox, $tagsLabel, $tagsBox
     ))
     $root.Controls.AddRange(@($header, $sourceBadge, $card, $privacyLabel, $cancelButton, $saveButton))

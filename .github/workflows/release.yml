@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build-release:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,11 +24,47 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart("v")
           .\scripts\build-release.ps1 -Version $version
-      - name: Create GitHub Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            dist/AI-Knowledge-Inbox-*-Windows.zip
+            dist/AI-Knowledge-Inbox-Extension-*.zip
+            dist/SHA256SUMS.txt
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build unsigned macOS package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          bash scripts/build-macos.sh "$version"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: dist/*macOS-unsigned.dmg
+
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Add macOS checksum
+        run: |
+          cd dist
+          sha256sum *macOS-unsigned.dmg >> SHA256SUMS.txt
+      - name: Create GitHub pre-release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          prerelease: true
+          body_path: RELEASE_NOTES.md
           files: |
             dist/AI-Knowledge-Inbox-*-Windows.zip
+            dist/AI-Knowledge-Inbox-*-macOS-unsigned.dmg
             dist/AI-Knowledge-Inbox-Extension-*.zip
             dist/SHA256SUMS.txt

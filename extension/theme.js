@@ -5,4 +5,6 @@
   document.documentElement.setAttribute("data-theme", theme);
   const skin = localStorage.getItem("library-skin") || "tech";
   document.documentElement.setAttribute("data-skin", skin);
+  const language = localStorage.getItem("ui-language") || "zh";
+  document.documentElement.setAttribute("lang", language === "en" ? "en" : "zh-CN");
 })();

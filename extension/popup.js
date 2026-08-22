@@ -6,12 +6,17 @@ const projectInput = document.getElementById("project");
 const tagsInput = document.getElementById("tags");
 const status = document.getElementById("status");
 const backendStatus = document.getElementById("backend");
+I18n.bindPicker(document.getElementById("languagePicker"));
 
 async function updateBackendStatus() {
   const mode = await KnowledgeStore.getBackendStatus();
   backendStatus.textContent = mode === "server"
-    ? "共享 SQLite 已连接"
-    : "浏览器本地模式 · 启动桌面伴侣后自动迁移";
+    ? I18n.t("共享 SQLite 已连接")
+    : `${I18n.t("浏览器本地模式")} · ${
+      I18n.getLanguage() === "en"
+        ? "Start the desktop companion to migrate automatically"
+        : "启动桌面伴侣后自动迁移"
+    }`;
   backendStatus.style.color = mode === "server"
     ? "var(--cp-success)"
     : "var(--cp-warning)";
@@ -60,12 +65,12 @@ form.addEventListener("submit", async event => {
       project: projectInput.value,
       tags: tagsInput.value
     });
-    status.textContent = "已保存到知识库";
+    status.textContent = I18n.t("已保存到知识库");
     status.style.color = "var(--cp-success)";
     contentInput.value = "";
     await updateBackendStatus();
   } catch (error) {
-    status.textContent = error.message || "保存失败";
+    status.textContent = I18n.t(error.message || "保存失败");
     status.style.color = "var(--cp-danger)";
   }
 });
@@ -75,10 +80,14 @@ document.getElementById("openLibrary").addEventListener("click", () => {
 });
 document.getElementById("suggestTags").addEventListener("click", () => {
   applySuggestedTags(true);
-  status.textContent = tagsInput.value ? "标签建议已更新" : "暂未识别出合适标签";
+  status.textContent = I18n.t(tagsInput.value ? "标签建议已更新" : "暂未识别出合适标签");
   status.style.color = "var(--cp-text-muted)";
 });
 contentInput.addEventListener("blur", () => applySuggestedTags());
 
 loadPageContext();
 updateBackendStatus();
+document.addEventListener("languagechange", () => {
+  updateBackendStatus();
+  I18n.apply();
+});

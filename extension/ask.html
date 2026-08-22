@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ask AI 知识库</title>
   <script src="theme.js"></script>
+  <script src="i18n.js"></script>
   <link rel="stylesheet" href="shared.css">
   <style>
     body { min-height: 100vh; }
@@ -24,6 +25,16 @@
       border-left: 6px solid var(--cp-accent);
       border-radius: 16px;
       background: var(--cp-surface);
+    }
+    .top-actions { display: flex; align-items: center; gap: 8px; }
+    .language-picker {
+      min-height: 40px;
+      padding: 8px 10px;
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      background: var(--cp-surface);
+      color: var(--cp-text);
+      font-weight: 700;
     }
     .eyebrow {
       margin: 0 0 7px;
@@ -232,7 +243,13 @@
         <p class="subtitle">从你的知识中检索、整合并给出可追溯回答。</p>
         <div class="status" id="aiStatus"><span class="status-dot"></span><span>正在检测浏览器内置 AI…</span></div>
       </div>
-      <button class="button" id="backButton" type="button">返回知识库</button>
+      <div class="top-actions">
+        <select class="language-picker" id="languagePicker" aria-label="界面语言">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+        <button class="button" id="backButton" type="button">返回知识库</button>
+      </div>
     </header>
 
     <section class="ask-layout">

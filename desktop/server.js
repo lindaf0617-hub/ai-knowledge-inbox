@@ -9,10 +9,16 @@ const { DatabaseSync } = require("node:sqlite");
 
 const HOST = "127.0.0.1";
 const PORT = 43127;
-const DATA_DIR = path.join(
-  process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"),
-  "AIKnowledgeInbox"
-);
+const DATA_DIR =
+  process.env.AI_KNOWLEDGE_DATA_DIR ||
+  (process.platform === "win32"
+    ? path.join(
+        process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"),
+        "AIKnowledgeInbox"
+      )
+    : process.platform === "darwin"
+      ? path.join(os.homedir(), "Library", "Application Support", "AIKnowledgeInbox")
+      : path.join(os.homedir(), ".local", "share", "AIKnowledgeInbox"));
 const DB_PATH = path.join(DATA_DIR, "knowledge.db");
 const SERVER_PID_FILE = path.join(DATA_DIR, "server.pid");
 const ONEDRIVE_ROOT =

@@ -30,10 +30,11 @@ Enable:
 
 1. Push the `main` branch.
 2. Confirm the Validate and Pages workflows pass.
-3. Create and push tag `v1.4.0`.
+3. Create and push tag `v1.5.0`.
 4. The Release workflow builds and attaches:
-   - `AI-Knowledge-Inbox-1.4.0-Windows.zip`
-   - `AI-Knowledge-Inbox-Extension-1.4.0.zip`
+   - `AI-Knowledge-Inbox-1.5.0-Windows.zip`
+   - `AI-Knowledge-Inbox-1.5.0-macOS-unsigned.dmg`
+   - `AI-Knowledge-Inbox-Extension-1.5.0.zip`
    - `SHA256SUMS.txt`
 5. Mark the GitHub Release as **pre-release** while Beta testing continues.
 

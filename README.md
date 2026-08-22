@@ -1,86 +1,64 @@
 # AI Knowledge Inbox
 
-Save useful output from AI assistants into one private, searchable knowledge base.
+> 把散落在 Copilot、ChatGPT、Claude 和网页里的 AI 产出，变成一个本地优先、可搜索、可追溯、可继续生长的个人知识库。
 
-## What it does
+Windows / macOS companion | Edge / Chrome extension | SQLite | OneDrive | Cited Ask
 
-- Capture copied text from Windows desktop apps with `Ctrl + ;`
-- Save selected web content from Edge or Chrome
-- Preserve common formatting as Markdown
-- Organize knowledge with projects, tags, summaries, and related-item suggestions
-- Search locally with keyword and lightweight semantic-vector modes
-- Ask questions across the knowledge base with browser built-in AI and cited sources
-- Sync through the user's own OneDrive folder
-- Export Markdown or JSON backups
+---
 
-## Privacy model
+AI Knowledge Inbox 解决一个简单问题：**AI 每天生成很多有价值的内容，但它们通常留在不同应用和会话里，之后很难再次找到和复用。**
 
-- The primary database is local SQLite.
-- The local API listens only on `127.0.0.1`.
-- OneDrive sync writes to the user's own OneDrive account.
-- No hosted backend, telemetry, or vendor API key is required.
-- Ask uses the browser's built-in Prompt API when available.
+它提供：
 
-See [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md).
+- 桌面端复制后按快捷键保存：Windows `Ctrl + ;`，macOS `Command + ;`
+- 浏览器选区右键保存，保留常见 Markdown 格式
+- 项目、标签、摘要、关键词与本地语义搜索
+- Ask 知识库：本地检索，浏览器内置 AI 综合，回答附 `[K1]` 引用
+- SQLite 本地存储和用户自己的 OneDrive 同步
+- 中文 / English 界面
+- Markdown 和 JSON 导出
 
-## Install a release
+---
 
-1. Download `AI-Knowledge-Inbox-<version>-Windows.zip` from [GitHub Releases](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/latest).
-2. Extract the ZIP.
-3. Run `安装 Beta.cmd`.
-4. In Edge or Chrome, enable Developer mode and load the extension folder shown by the installer.
-5. Copy text in a desktop AI app and press `Ctrl + ;`.
+![Knowledge library](store-assets/screenshot-library.png)
 
-The Windows package includes its own Node.js runtime.
+![Ask with citations](store-assets/screenshot-ask.png)
 
-## Browser extension only
+---
 
-Download `AI-Knowledge-Inbox-Extension-<version>.zip`, extract it, then load the extracted directory from:
+## 安装
 
-- Edge: `edge://extensions`
-- Chrome: `chrome://extensions`
+从 [Releases](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/latest) 下载：
 
-Without the desktop companion, the extension uses browser-local storage. When the companion becomes available, it safely migrates local entries into the shared SQLite database.
+- Windows：`AI-Knowledge-Inbox-<version>-Windows.zip`
+- macOS：`AI-Knowledge-Inbox-<version>-macOS-unsigned.dmg`
+- 仅浏览器扩展：`AI-Knowledge-Inbox-Extension-<version>.zip`
 
-## Ask knowledge base
+Windows 解压后运行 `安装 Beta.cmd`。macOS 首个 Beta 尚未签名，需按 Release 说明允许打开。
 
-Open the library and select **Ask 知识库**. The workflow is:
+浏览器扩展暂以 Developer mode 加载；商店版本准备中。
 
-1. Hybrid local retrieval ranks relevant knowledge.
-2. Only the selected knowledge is provided to browser built-in AI.
-3. The answer cites sources as `[K1]`, `[K2]`, and so on.
-4. The answer can be saved back into the library.
+---
 
-If Prompt API is unavailable, retrieval sources remain visible but synthesis is disabled.
+## 隐私
 
-## Platform support
+- 主库保存在本机 SQLite
+- 本地服务只监听 `127.0.0.1`
+- OneDrive 同步写入用户自己的 OneDrive
+- 无托管后端、广告或遥测
+- Ask 仅在浏览器支持 Prompt API 时调用内置 AI
 
-| Component | Windows | macOS |
-|---|---:|---:|
-| Edge/Chrome extension | Yes | Yes |
-| Desktop clipboard companion | Yes | Not yet |
-| OneDrive sync | Yes | Through Windows companion |
+详见 [PRIVACY.md](PRIVACY.md) 与 [SECURITY.md](SECURITY.md)。
 
-## Development
+---
 
-Requirements:
+## 项目资料
 
-- Node.js 24+
-- Windows PowerShell 5.1+ for the desktop companion and packaging
+- [完整项目记录](PROJECT_RECORD.md)
+- [黑客松项目陈述](HACKATHON.md)
+- [知识 Agent 路线图](AGENT_ROADMAP.md)
+- [发布说明](PUBLISHING.md)
 
-Validation:
+---
 
-```powershell
-node --check desktop\server.js
-Get-ChildItem extension -Filter *.js | ForEach-Object { node --check $_.FullName }
-```
-
-Build a release:
-
-```powershell
-.\scripts\build-release.ps1 -Version 1.4.0
-```
-
-## License
-
-[MIT](LICENSE)
+MIT License.

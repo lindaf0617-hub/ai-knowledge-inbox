@@ -5,6 +5,7 @@ const askState = {
   answer: "",
   mode: "synthesize"
 };
+I18n.bindPicker(document.getElementById("languagePicker"));
 
 const askElements = {
   question: document.getElementById("question"),
@@ -57,7 +58,7 @@ function retrieve(question, entries, limit = 8) {
 }
 
 function showToast(message) {
-  askElements.toast.textContent = message;
+  askElements.toast.textContent = I18n.t(message);
   askElements.toast.classList.add("show");
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => askElements.toast.classList.remove("show"), 2200);
@@ -65,9 +66,9 @@ function showToast(message) {
 
 function renderSources() {
   askElements.sourceList.replaceChildren();
-  askElements.sourceCount.textContent = askState.sources.length
+  askElements.sourceCount.textContent = I18n.t(askState.sources.length
     ? `已选取 ${askState.sources.length} 条相关知识`
-    : "没有找到相关知识";
+    : "没有找到相关知识");
 
   askState.sources.forEach((entry, index) => {
     const card = document.createElement("article");
@@ -81,14 +82,14 @@ function renderSources() {
     meta.className = "source-meta";
     meta.textContent = [entry.project, entry.tags.join(" · ")]
       .filter(Boolean)
-      .join(" // ") || "未分类";
+      .join(" // ") || (I18n.getLanguage() === "en" ? "Uncategorized" : "未分类");
     card.append(title, meta);
 
     if (entry.source && /^https?:/i.test(entry.source)) {
       const open = document.createElement("button");
       open.className = "source-open";
       open.type = "button";
-      open.textContent = "打开原始来源";
+      open.textContent = I18n.t("打开原始来源");
       open.addEventListener("click", () => chrome.tabs.create({ url: entry.source }));
       card.append(open);
     }
@@ -101,12 +102,12 @@ function setAiStatus(status) {
   const label = askElements.status.querySelector("span:last-child");
   if (status === "available") {
     askElements.status.classList.add("available");
-    label.textContent = "浏览器内置 AI 可用 · 内容在设备本地处理";
+    label.textContent = I18n.t("浏览器内置 AI 可用 · 内容在设备本地处理");
   } else if (status === "downloadable" || status === "downloading") {
-    label.textContent = "浏览器 AI 模型将在首次使用时下载";
+    label.textContent = I18n.t("浏览器 AI 模型将在首次使用时下载");
   } else {
     askElements.status.classList.add("unavailable");
-    label.textContent = "浏览器内置 AI 不可用 · 仍可查看本地检索来源";
+    label.textContent = I18n.t("浏览器内置 AI 不可用 · 仍可查看本地检索来源");
   }
 }
 
@@ -128,12 +129,13 @@ async function askKnowledgeBase() {
   }
 
   askElements.submit.disabled = true;
-  askElements.submit.textContent = "AI 正在整合…";
+  askElements.submit.textContent = I18n.t("AI 正在整合…");
   try {
     askState.answer = await BrowserAI.answer(
       askState.question,
       askState.sources,
       askState.mode
+      , I18n.getLanguage()
     );
     MarkdownRenderer.render(askElements.markdown, askState.answer);
     askElements.empty.classList.add("hidden");
@@ -142,7 +144,7 @@ async function askKnowledgeBase() {
     showToast(error.message || "生成回答失败");
   } finally {
     askElements.submit.disabled = false;
-    askElements.submit.textContent = "检索并回答";
+    askElements.submit.textContent = I18n.t("检索并回答");
   }
 }
 
@@ -169,11 +171,13 @@ askElements.save.addEventListener("click", async () => {
   if (!askState.answer) return;
   try {
     await KnowledgeStore.addEntry({
-      title: `知识库回答：${askState.question.slice(0, 40)}`,
+      title: I18n.getLanguage() === "en"
+        ? `Knowledge answer: ${askState.question.slice(0, 40)}`
+        : `知识库回答：${askState.question.slice(0, 40)}`,
       content: savedAnswerMarkdown(),
       project: "AI 知识整合",
       tags: ["AI", "知识整合"],
-      summary: `基于 ${askState.sources.length} 条知识生成的回答`
+      summary: I18n.t(`基于 ${askState.sources.length} 条知识生成的回答`)
     });
     showToast("回答已保存到知识库");
   } catch (error) {
@@ -193,4 +197,9 @@ Promise.all([
 }).catch(error => {
   setAiStatus("unavailable");
   showToast(error.message || "知识库加载失败");
+});
+document.addEventListener("languagechange", () => {
+  setAiStatus(askElements.status.classList.contains("available") ? "available" : "unavailable");
+  renderSources();
+  I18n.apply();
 });

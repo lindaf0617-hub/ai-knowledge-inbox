@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>保存到 AI 知识库</title>
   <script src="theme.js"></script>
+  <script src="i18n.js"></script>
   <link rel="stylesheet" href="shared.css">
   <style>
     body { width: 390px; background: var(--cp-surface); }
@@ -24,6 +25,14 @@
       background: transparent;
       color: var(--cp-link);
       white-space: nowrap;
+    }
+    .popup-tools { display: flex; align-items: center; gap: 8px; }
+    .language-picker {
+      height: 30px;
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      background: var(--cp-surface);
+      color: var(--cp-text);
     }
     #status {
       min-height: 18px;
@@ -60,7 +69,13 @@
         <h1>保存到知识库</h1>
         <p>自动带入当前页面选中的文字。</p>
       </div>
-      <button class="library-link" id="openLibrary" type="button">打开知识库</button>
+      <div class="popup-tools">
+        <select class="language-picker" id="languagePicker" aria-label="界面语言">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+        <button class="library-link" id="openLibrary" type="button">打开知识库</button>
+      </div>
     </div>
     <div id="backend">正在检测存储…</div>
     <form id="entryForm">

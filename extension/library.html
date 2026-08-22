@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI 知识收件箱</title>
   <script src="theme.js"></script>
+  <script src="i18n.js"></script>
   <link rel="stylesheet" href="shared.css">
   <style>
     .app {
@@ -54,6 +55,15 @@
     }
     .sync-line.error { color: var(--cp-danger); }
     .header-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .language-picker {
+      min-height: 40px;
+      padding: 8px 10px;
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      background: var(--cp-surface);
+      color: var(--cp-text);
+      font-weight: 700;
+    }
     .insights {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -534,6 +544,10 @@
       </div>
       <div class="header-actions">
         <button class="button primary" id="askButton" type="button">Ask 知识库</button>
+        <select class="language-picker" id="languagePicker" aria-label="界面语言">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
         <select class="skin-picker" id="skinPicker" aria-label="知识库配色">
           <option value="classic">配色 1 · 鲜艳</option>
           <option value="tech">配色 2 · 科技</option>
