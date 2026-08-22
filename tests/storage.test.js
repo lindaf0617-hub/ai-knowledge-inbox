@@ -13,8 +13,8 @@ const source = fs.readFileSync(
   "utf8"
 );
 
-function createStore({ entries = [], token = "", fetchImpl }) {
-  const local = { entries, desktopApiToken: token };
+function createStore({ entries = [], token = "", agentLedger = null, fetchImpl }) {
+  const local = { entries, desktopApiToken: token, agentLedger };
   const context = {
     AbortController,
     Array,
@@ -86,6 +86,64 @@ test("storage blocks duplicate local content", async () => {
     store.addEntry({ content: " same   content " }),
     /已经保存过/
   );
+});
+
+test("browser fallback preserves lifecycle and provenance metadata", async () => {
+  const { local, store } = createStore({
+    fetchImpl: async () => { throw new Error("offline"); }
+  });
+
+  const created = await store.addEntry({
+    title: "Draft insight",
+    content: "Lifecycle-aware local content",
+    status: "draft",
+    confidence: 0.75,
+    provenance: { origin: "agent", sourceIds: ["source-1"] },
+    agentRunId: "run-1",
+    approvedBy: "local-user",
+    approvedAt: "2026-08-22T12:00:00.000Z",
+    supersedes: ["old-1"],
+    relations: ["related-1"]
+  });
+
+  assert.equal(created.status, "draft");
+  assert.equal(created.confidence, 0.75);
+  assert.equal(created.provenance.origin, "agent");
+  assert.deepEqual([...created.supersedes], ["old-1"]);
+  assert.equal(local.entries[0].agentRunId, "run-1");
+});
+
+test("offline backup preserves ledger and migrates it atomically after pairing", async () => {
+  const entry = {
+    id: "offline-managed", title: "Managed",
+    content: "Managed offline content", createdAt: new Date().toISOString(),
+    status: "verified", provenance: { origin: "agent", runId: "r", proposalId: "p" }
+  };
+  const ledger = { version: 3, runs: [], proposals: [], audit: [] };
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/pairing/exchange")) {
+      return new Response(JSON.stringify({ token: "ledger-token" }), { status: 200 });
+    }
+    if (url.endsWith("/auth/challenge")) return challengeResponse("ledger-token", options);
+    if (url.endsWith("/import")) {
+      const body = JSON.parse(options.body);
+      assert.equal(body.entries[0].id, entry.id);
+      assert.deepEqual(body.agentLedger, ledger);
+      return new Response(JSON.stringify({ imported: 1 }), { status: 200 });
+    }
+    throw new Error(`Unexpected ${url}`);
+  };
+  const offline = createStore({ fetchImpl: async () => { throw new Error("offline"); } });
+  await offline.store.importEntries([entry], ledger);
+  const paired = createStore({
+    entries: offline.local.entries, agentLedger: offline.local.agentLedger, fetchImpl
+  });
+  await paired.store.pairDesktop("ABCDEFGH");
+  assert.equal(paired.local.entries.length, 0);
+  assert.equal(paired.local.agentLedger, null);
+  assert.ok(calls.some(call => call.url.endsWith("/import")));
 });
 
 test("storage migrates browser-local entries into shared service", async () => {

@@ -99,6 +99,54 @@ async function request(route, options = {}, url = base) {
   return { body, response };
 }
 
+function editableEntry(entry, changes = {}) {
+  return {
+    title: entry.title,
+    content: entry.content,
+    source: entry.source,
+    project: entry.project,
+    tags: entry.tags,
+    summary: entry.summary,
+    ...changes
+  };
+}
+
+async function createCompletedProposal(source, suffix, project = "Stale") {
+  const run = await request("/agent-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      goal: `Stale source check ${suffix}`,
+      outputFormat: "report",
+      provider: "browser",
+      sourceIds: [source.id],
+      permissionScope: { project }
+    })
+  });
+  assert.equal(run.response.status, 201, run.body.error);
+  await request(`/agent-runs/${run.body.run.id}/start`, {
+    method: "POST", body: "{}"
+  });
+  const proposal = await request(`/agent-runs/${run.body.run.id}/proposals`, {
+    method: "POST",
+    body: JSON.stringify({
+      title: `Candidate ${suffix}`,
+      content: `Candidate content ${suffix} ${crypto.randomUUID()}`,
+      summary: "",
+      project,
+      tags: ["stale"],
+      sourceIds: [source.id],
+      confidence: 0.7,
+      rationale: "Pinned evidence"
+    })
+  });
+  assert.equal(proposal.response.status, 201, proposal.body.error);
+  await request(`/agent-runs/${run.body.run.id}/complete`, {
+    method: "POST",
+    body: JSON.stringify({ result: "Analysis [K1]" })
+  });
+  return { run: run.body.run, proposal: proposal.body.proposal };
+}
+
 function writeRemoteOperations() {
   fs.mkdirSync(paths.operations, { recursive: true });
   fs.writeFileSync(
@@ -187,11 +235,13 @@ test("v1 SQLite migrates explicitly without losing entries or tombstones", async
   const migrated = await startService(migrationData, migrationOneDrive);
   try {
     const health = await request("/health", {}, migrated.url);
-    assert.equal(health.body.cloud.schemaVersion, 2);
+    assert.equal(health.body.cloud.schemaVersion, 9);
     const listed = await request("/entries", {}, migrated.url);
     assert.equal(listed.body.entries.length, 1);
     assert.equal(listed.body.entries[0].title, "Retained v1");
     assert.equal(listed.body.entries[0].viewCount, 3);
+    assert.equal(listed.body.entries[0].status, "raw");
+    assert.deepEqual(listed.body.entries[0].provenance, {});
     await request("/sync", { method: "POST" }, migrated.url);
     const operationLog = JSON.parse(fs.readFileSync(
       health.body.cloud.paths.operationFile,
@@ -206,10 +256,16 @@ test("v1 SQLite migrates explicitly without losing entries or tombstones", async
       const versions = database.prepare(
         "SELECT version FROM schema_version ORDER BY version"
       ).all().map(row => row.version);
-      assert.deepEqual(versions, [1, 2]);
+      assert.deepEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
       assert.equal(
         database.prepare("SELECT COUNT(*) AS count FROM operations").get().count,
         2
+      );
+      assert.equal(
+        database.prepare(
+          "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('agent_runs', 'knowledge_proposals', 'audit_log')"
+        ).get().count,
+        3
       );
       assert.equal(
         database.prepare(
@@ -711,7 +767,7 @@ test("health and sync status expose v2 storage details", async () => {
   assert.equal(body.status, "ok");
   assert.equal(body.storage, "sqlite");
   assert.equal(body.cloud.enabled, true);
-  assert.equal(body.cloud.schemaVersion, 2);
+  assert.equal(body.cloud.schemaVersion, 9);
   assert.equal(typeof body.cloud.operationCount, "number");
   assert.equal(typeof body.cloud.conflictCount, "number");
   assert.equal(body.cloud.paths.database, path.join(dataDir, "knowledge.db"));
@@ -941,7 +997,7 @@ test("diagnostics are authenticated and redact knowledge, secrets, and home path
   assert.equal(unauthorized.response.status, 401);
   const result = await request("/diagnostics");
   assert.equal(result.response.status, 200);
-  assert.equal(result.body.schemaVersion, 2);
+  assert.equal(result.body.schemaVersion, 9);
   assert.equal(typeof result.body.counts.entries, "number");
   const serialized = JSON.stringify(result.body);
   for (const forbidden of [
@@ -1006,8 +1062,11 @@ test("existing CRUD, duplicate prevention, and view tracking remain compatible",
   const updated = await request(`/entries/${id}`, {
     method: "PUT",
     body: JSON.stringify({
-      ...created.body.entry,
       title: "Updated agent plan",
+      content: created.body.entry.content,
+      source: created.body.entry.source,
+      project: created.body.entry.project,
+      tags: created.body.entry.tags,
       summary: "A test summary"
     })
   });
@@ -1016,6 +1075,1344 @@ test("existing CRUD, duplicate prevention, and view tracking remain compatible",
 
   const viewed = await request(`/entries/${id}/view`, { method: "POST" });
   assert.equal(viewed.body.entry.viewCount, 1);
+});
+
+test("agent approval lifecycle is authenticated, atomic, idempotent, and auditable", async () => {
+  const forgedImportId = crypto.randomUUID();
+  const forgedImport = await request("/import", {
+    method: "POST",
+    body: JSON.stringify({
+      entries: [{
+        id: forgedImportId,
+        title: "Forged import",
+        content: `Forged import ${crypto.randomUUID()}`,
+        createdAt: new Date().toISOString(),
+        status: "verified",
+        confidence: 1,
+        provenance: { origin: "agent", runId: "forged", proposalId: "forged" },
+        agentRunId: "forged",
+        approvedBy: "attacker",
+        approvedAt: new Date().toISOString()
+      }]
+    })
+  });
+  assert.equal(forgedImport.response.status, 400);
+  assert.equal(
+    (await request("/entries")).body.entries.some(entry => entry.id === forgedImportId),
+    false
+  );
+  assert.equal(
+    (await request("/audit?limit=500")).body.events.some(event =>
+      event.entryId === forgedImportId
+    ),
+    false
+  );
+
+  const bypassCreate = await request("/entries", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Forged verified knowledge",
+      content: `Forged ${crypto.randomUUID()}`,
+      status: "verified",
+      confidence: 1,
+      provenance: { origin: "agent" },
+      approvedBy: "attacker"
+    })
+  });
+  assert.equal(bypassCreate.response.status, 403);
+
+  const seed = await request("/entries", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Agent approval source",
+      content: `Agent approval evidence ${crypto.randomUUID()}`,
+      project: "Approval"
+    })
+  });
+  assert.equal(seed.body.entry.status, "raw");
+
+  const unauthorized = await fetch(`${base}/agent-runs`);
+  assert.equal(unauthorized.status, 401);
+
+  const invalidRun = await request("/agent-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      goal: "Invalid source",
+      outputFormat: "report",
+      provider: "browser",
+      sourceIds: ["missing-source"]
+    })
+  });
+  assert.equal(invalidRun.response.status, 400);
+  const emptyRun = await request("/agent-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      goal: "No evidence",
+      outputFormat: "report",
+      provider: "browser",
+      sourceIds: []
+    })
+  });
+  assert.equal(emptyRun.response.status, 400);
+
+  const created = await request("/agent-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      goal: "Create grounded approval knowledge",
+      outputFormat: "report",
+      provider: "browser",
+      sourceIds: [seed.body.entry.id],
+      plan: { steps: ["retrieve", "propose"] },
+      permissionScope: { project: "Approval", externalSupplementation: false }
+    })
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.body.run.status, "planned");
+  assert.equal(created.body.run.permissionScope.mode, "propose-only");
+  const runId = created.body.run.id;
+  assert.equal((await request(`/agent-runs/${runId}`)).body.run.goal,
+    "Create grounded approval knowledge");
+  assert.ok((await request("/agent-runs")).body.runs.some(run => run.id === runId));
+
+  const tooEarly = await request(`/agent-runs/${runId}/proposals`, {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Too early",
+      content: "No",
+      summary: "",
+      project: "Approval",
+      tags: [],
+      sourceIds: [seed.body.entry.id],
+      confidence: 0.5,
+      rationale: "No"
+    })
+  });
+  assert.equal(tooEarly.response.status, 409);
+
+  assert.equal(
+    (await request(`/agent-runs/${runId}/start`, {
+      method: "POST", body: "{}"
+    })).body.run.status,
+    "running"
+  );
+  const emptyProposal = await request(`/agent-runs/${runId}/proposals`, {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Empty evidence",
+      content: "Must reject",
+      summary: "",
+      project: "Approval",
+      tags: [],
+      sourceIds: [],
+      confidence: 0.5,
+      rationale: "No sources"
+    })
+  });
+  assert.equal(emptyProposal.response.status, 400);
+  const invalidSource = await request(`/agent-runs/${runId}/proposals`, {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Unknown source",
+      content: "No",
+      summary: "",
+      project: "Approval",
+      tags: [],
+      sourceIds: ["not-in-run"],
+      confidence: 0.5,
+      rationale: "No"
+    })
+  });
+  assert.equal(invalidSource.response.status, 400);
+
+  const proposalInput = {
+    title: "Approved agent insight",
+    content: `Grounded candidate ${crypto.randomUUID()}`,
+    summary: "Candidate summary",
+    project: "Approval",
+    tags: ["Agent", "Approval"],
+    sourceIds: [seed.body.entry.id],
+    confidence: 0.84,
+    rationale: "Directly supported by the selected source"
+  };
+  const firstProposal = await request(`/agent-runs/${runId}/proposals`, {
+    method: "POST",
+    body: JSON.stringify(proposalInput)
+  });
+  const rejectedProposal = await request(`/agent-runs/${runId}/proposals`, {
+    method: "POST",
+    body: JSON.stringify({
+      ...proposalInput,
+      title: "Rejected insight",
+      content: `Rejected candidate ${crypto.randomUUID()}`
+    })
+  });
+  assert.equal(firstProposal.response.status, 201);
+  assert.equal(rejectedProposal.response.status, 201);
+  assert.deepEqual(
+    firstProposal.body.proposal.sourceVersions,
+    created.body.run.sourcePins
+  );
+  assert.equal(
+    (await request(`/agent-runs/${runId}/proposals`)).body.proposals.length,
+    2
+  );
+
+  const completed = await request(`/agent-runs/${runId}/complete`, {
+    method: "POST",
+    body: JSON.stringify({ result: "Grounded analysis [K1]" })
+  });
+  assert.equal(completed.body.run.status, "completed");
+  const approvalId = "integration-idempotency-key";
+  const approval = await request(
+    `/knowledge-proposals/${firstProposal.body.proposal.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        approvedBy: "integration-user",
+        entryStatus: "verified",
+        idempotencyKey: approvalId
+      })
+    }
+  );
+  assert.equal(approval.response.status, 200);
+  assert.equal(approval.body.entry.status, "verified");
+  assert.equal(approval.body.entry.agentRunId, runId);
+  assert.equal(approval.body.entry.provenance.proposalId, firstProposal.body.proposal.id);
+  assert.deepEqual(approval.body.entry.provenance.sourceIds, [seed.body.entry.id]);
+  const forgedUpdate = await request(`/entries/${approval.body.entry.id}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      title: "Forged",
+      content: approval.body.entry.content,
+      status: "raw",
+      provenance: {},
+      confidence: 0
+    })
+  });
+  assert.equal(forgedUpdate.response.status, 403);
+  const genericEdit = await request(`/entries/${approval.body.entry.id}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      title: "Edited title only",
+      content: approval.body.entry.content,
+      summary: approval.body.entry.summary,
+      source: approval.body.entry.source,
+      project: approval.body.entry.project,
+      tags: approval.body.entry.tags
+    })
+  });
+  assert.equal(genericEdit.response.status, 409);
+  assert.match(genericEdit.body.error, /候选知识并审批/);
+  const afterRejectedEdit = (await request("/entries")).body.entries.find(
+    entry => entry.id === approval.body.entry.id
+  );
+  assert.equal(afterRejectedEdit.title, approval.body.entry.title);
+  assert.equal(afterRejectedEdit.status, "verified");
+  assert.deepEqual(afterRejectedEdit.provenance, approval.body.entry.provenance);
+
+  const repeated = await request(
+    `/knowledge-proposals/${firstProposal.body.proposal.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        approvedBy: "integration-user",
+        entryStatus: "verified",
+        idempotencyKey: approvalId
+      })
+    }
+  );
+  assert.equal(repeated.response.status, 200);
+  assert.equal(repeated.body.idempotent, true);
+  assert.equal(repeated.body.entry.id, approval.body.entry.id);
+  await request("/sync", { method: "POST" });
+  const operationLog = JSON.parse(fs.readFileSync(paths.operationFile, "utf8"));
+  const lifecycleOperation = operationLog.operations
+    .filter(operation => operation.entityId === approval.body.entry.id)
+    .at(-1);
+  assert.equal(lifecycleOperation.payloadVersion, 2);
+  assert.equal(lifecycleOperation.entry.status, "verified");
+  assert.equal(lifecycleOperation.entry.confidence, 0.84);
+  assert.equal(lifecycleOperation.entry.provenance.runId, runId);
+  const legacyLifecycleDevice = "legacy-lifecycle-device";
+  const legacyLifecycleFile = path.join(paths.operations, `${legacyLifecycleDevice}.json`);
+  const legacyOperations = [{
+    opId: `${legacyLifecycleDevice}:1`,
+    deviceId: legacyLifecycleDevice,
+    counter: 1,
+    entityId: approval.body.entry.id,
+    kind: "upsert",
+    vector: { ...lifecycleOperation.vector, [legacyLifecycleDevice]: 1 },
+    entry: {
+      id: approval.body.entry.id,
+      title: "Legacy edit preserves verified",
+      content: approval.body.entry.content,
+      source: approval.body.entry.source,
+      project: approval.body.entry.project,
+      tags: approval.body.entry.tags,
+      summary: approval.body.entry.summary,
+      createdAt: approval.body.entry.createdAt,
+      updatedAt: new Date().toISOString(),
+      viewCount: 2,
+      lastViewedAt: new Date().toISOString()
+    },
+    createdAt: new Date().toISOString()
+  }];
+  fs.writeFileSync(legacyLifecycleFile, JSON.stringify({
+    version: 2,
+    deviceId: legacyLifecycleDevice,
+    operations: legacyOperations
+  }));
+  await request("/sync", { method: "POST" });
+  const afterLegacyVerified = (await request("/entries")).body.entries
+    .find(entry => entry.id === approval.body.entry.id);
+  assert.equal(afterLegacyVerified.status, "verified");
+  assert.equal(afterLegacyVerified.confidence, 0.84);
+  assert.deepEqual(afterLegacyVerified.provenance, approval.body.entry.provenance);
+
+  const secondApproval = await request(
+    `/knowledge-proposals/${firstProposal.body.proposal.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        approvedBy: "integration-user",
+        idempotencyKey: "different-key"
+      })
+    }
+  );
+  assert.equal(secondApproval.response.status, 409);
+
+  const rejected = await request(
+    `/knowledge-proposals/${rejectedProposal.body.proposal.id}/reject`,
+    { method: "POST", body: JSON.stringify({ rejectedBy: "integration-user" }) }
+  );
+  assert.equal(rejected.body.proposal.status, "rejected");
+  const approveRejected = await request(
+    `/knowledge-proposals/${rejectedProposal.body.proposal.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        approvedBy: "integration-user",
+        idempotencyKey: "reject-key"
+      })
+    }
+  );
+  assert.equal(approveRejected.response.status, 409);
+
+  const blockedDelete = await request(`/entries/${approval.body.entry.id}`, {
+    method: "DELETE"
+  });
+  assert.equal(blockedDelete.response.status, 409);
+  assert.match(blockedDelete.body.error, /撤销审批/);
+
+  const undo = await request(
+    `/knowledge-proposals/${firstProposal.body.proposal.id}/undo`,
+    { method: "POST", body: JSON.stringify({ actor: "integration-user" }) }
+  );
+  assert.equal(undo.body.entry.status, "deprecated");
+  assert.ok(undo.body.proposal.undoneAt);
+  await request("/sync", { method: "POST" });
+  const afterUndoLog = JSON.parse(fs.readFileSync(paths.operationFile, "utf8"));
+  const afterUndoOperation = afterUndoLog.operations
+    .filter(operation => operation.entityId === approval.body.entry.id)
+    .at(-1);
+  legacyOperations.push({
+    opId: `${legacyLifecycleDevice}:2`,
+    deviceId: legacyLifecycleDevice,
+    counter: 2,
+    entityId: approval.body.entry.id,
+    kind: "upsert",
+    vector: { ...afterUndoOperation.vector, [legacyLifecycleDevice]: 2 },
+    entry: {
+      id: approval.body.entry.id,
+      title: "Legacy view cannot revive",
+      content: afterLegacyVerified.content,
+      source: afterLegacyVerified.source,
+      project: afterLegacyVerified.project,
+      tags: afterLegacyVerified.tags,
+      summary: afterLegacyVerified.summary,
+      createdAt: afterLegacyVerified.createdAt,
+      updatedAt: new Date().toISOString(),
+      viewCount: 99,
+      lastViewedAt: new Date().toISOString()
+    },
+    createdAt: new Date().toISOString()
+  });
+  fs.writeFileSync(legacyLifecycleFile, JSON.stringify({
+    version: 2,
+    deviceId: legacyLifecycleDevice,
+    operations: legacyOperations
+  }));
+  await request("/sync", { method: "POST" });
+  const afterLegacyDeprecated = (await request("/entries")).body.entries
+    .find(entry => entry.id === approval.body.entry.id);
+  assert.equal(afterLegacyDeprecated.status, "deprecated");
+  assert.deepEqual(afterLegacyDeprecated.provenance, approval.body.entry.provenance);
+  assert.equal(
+    (await request(
+      `/knowledge-proposals/${firstProposal.body.proposal.id}/undo`,
+      { method: "POST", body: JSON.stringify({ actor: "integration-user" }) }
+    )).response.status,
+    409
+  );
+
+  const audit = await request("/audit?limit=100");
+  const events = audit.body.events.filter(event => event.runId === runId);
+  assert.ok(events.some(event => event.eventType === "proposal"));
+  assert.ok(events.some(event => event.eventType === "approval"));
+  assert.ok(events.some(event => event.eventType === "write"));
+  assert.ok(events.some(event => event.eventType === "rejection"));
+  assert.ok(events.some(event => event.eventType === "undo"));
+
+  const cancelRun = await request("/agent-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      goal: "Cancel me",
+      outputFormat: "brief",
+      provider: "ollama",
+      model: "llama3.2",
+      sourceIds: [seed.body.entry.id],
+      permissionScope: { project: "Approval" }
+    })
+  });
+  const cancelled = await request(`/agent-runs/${cancelRun.body.run.id}/cancel`, {
+    method: "POST", body: "{}"
+  });
+  assert.equal(cancelled.body.run.status, "cancelled");
+  assert.equal(
+    (await request(`/agent-runs/${cancelRun.body.run.id}/start`, {
+      method: "POST", body: "{}"
+    })).response.status,
+    409
+  );
+});
+
+test("approval rejects edited, deleted, and deprecated pinned sources", async () => {
+  const createSource = async label => (await request("/entries", {
+    method: "POST",
+    body: JSON.stringify({
+      title: `${label} source`,
+      content: `${label} evidence ${crypto.randomUUID()}`,
+      project: "Stale"
+    })
+  })).body.entry;
+  const approve = proposal => request(
+    `/knowledge-proposals/${proposal.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        approvedBy: "stale-test",
+        idempotencyKey: crypto.randomUUID()
+      })
+    }
+  );
+
+  const prePlanSource = await createSource("Before plan");
+  const prePlanContent = `${prePlanSource.content} current at planning`;
+  await request(`/entries/${prePlanSource.id}`, {
+    method: "PUT",
+    body: JSON.stringify(editableEntry(prePlanSource, {
+      content: prePlanContent
+    }))
+  });
+  const pinnedPlan = await request("/agent-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      goal: "Use current server snapshot",
+      outputFormat: "report",
+      provider: "browser",
+      sourceIds: [prePlanSource.id],
+      permissionScope: { project: "Stale" }
+    })
+  });
+  assert.equal(pinnedPlan.body.run.sourcePins[0].content, prePlanContent);
+  assert.equal(
+    crypto.createHash("sha256").update(prePlanContent).digest("hex"),
+    pinnedPlan.body.run.sourcePins[0].contentHash
+  );
+  await request(`/agent-runs/${pinnedPlan.body.run.id}/cancel`, {
+    method: "POST", body: "{}"
+  });
+
+  const preStartSource = await createSource("Before start");
+  const preStartRun = await request("/agent-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      goal: "Fail stale before provider",
+      outputFormat: "report",
+      provider: "browser",
+      sourceIds: [preStartSource.id],
+      permissionScope: { project: "Stale" }
+    })
+  });
+  await request(`/entries/${preStartSource.id}`, {
+    method: "PUT",
+    body: JSON.stringify(editableEntry(preStartSource, {
+      content: `${preStartSource.content} changed before start`
+    }))
+  });
+  const staleStart = await request(`/agent-runs/${preStartRun.body.run.id}/start`, {
+    method: "POST", body: "{}"
+  });
+  assert.equal(staleStart.response.status, 409);
+  assert.equal(staleStart.body.code, "stale_source");
+  assert.equal(
+    (await request(`/agent-runs/${preStartRun.body.run.id}`)).body.run.status,
+    "planned"
+  );
+
+  const telemetrySource = await createSource("Telemetry");
+  const telemetryRun = await request("/agent-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      goal: "Ignore view telemetry",
+      outputFormat: "report",
+      provider: "browser",
+      sourceIds: [telemetrySource.id],
+      permissionScope: { project: "Stale" }
+    })
+  });
+  const telemetryRevision = telemetryRun.body.run.sourcePins[0].semanticRevision;
+  await request(`/entries/${telemetrySource.id}/view`, { method: "POST" });
+  const telemetryStart = await request(
+    `/agent-runs/${telemetryRun.body.run.id}/start`,
+    { method: "POST", body: "{}" }
+  );
+  assert.equal(telemetryStart.response.status, 200, telemetryStart.body.error);
+  const telemetryProposal = await request(
+    `/agent-runs/${telemetryRun.body.run.id}/proposals`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Telemetry-safe candidate",
+        content: `Telemetry candidate ${crypto.randomUUID()}`,
+        summary: "",
+        project: "Stale",
+        tags: [],
+        sourceIds: [telemetrySource.id],
+        confidence: 0.7,
+        rationale: "View count is not semantic"
+      })
+    }
+  );
+  assert.equal(telemetryProposal.response.status, 201, telemetryProposal.body.error);
+  assert.equal(
+    telemetryProposal.body.proposal.sourceVersions[0].semanticRevision,
+    telemetryRevision
+  );
+  await request(`/agent-runs/${telemetryRun.body.run.id}/complete`, {
+    method: "POST",
+    body: JSON.stringify({ result: "Telemetry-safe [K1]" })
+  });
+  await request(`/entries/${telemetrySource.id}/view`, { method: "POST" });
+  const telemetryApproval = await approve(telemetryProposal.body.proposal);
+  assert.equal(telemetryApproval.response.status, 200, telemetryApproval.body.error);
+
+  const duringProviderSource = await createSource("During provider");
+  const duringProviderRun = await request("/agent-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      goal: "Provider execution race",
+      outputFormat: "report",
+      provider: "browser",
+      sourceIds: [duringProviderSource.id],
+      permissionScope: { project: "Stale" }
+    })
+  });
+  assert.equal(duringProviderRun.body.run.sourcePins[0].id, duringProviderSource.id);
+  await request(`/agent-runs/${duringProviderRun.body.run.id}/start`, {
+    method: "POST", body: "{}"
+  });
+  await request(`/entries/${duringProviderSource.id}`, {
+    method: "PUT",
+    body: JSON.stringify(editableEntry(duringProviderSource, {
+      content: `${duringProviderSource.content} changed during provider`
+    }))
+  });
+  const lateProposal = await request(
+    `/agent-runs/${duringProviderRun.body.run.id}/proposals`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Late proposal",
+        content: `Late ${crypto.randomUUID()}`,
+        summary: "",
+        project: "Stale",
+        tags: [],
+        sourceIds: [duringProviderSource.id],
+        confidence: 0.5,
+        rationale: "Now stale"
+      })
+    }
+  );
+  assert.equal(lateProposal.response.status, 409);
+  assert.equal(lateProposal.body.code, "stale_source");
+  await request(`/agent-runs/${duringProviderRun.body.run.id}/cancel`, {
+    method: "POST", body: "{}"
+  });
+
+  const editedSource = await createSource("Edited");
+  const edited = await createCompletedProposal(editedSource, "edited");
+  await request(`/entries/${editedSource.id}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      title: editedSource.title,
+      content: `${editedSource.content} changed`,
+      source: editedSource.source,
+      project: editedSource.project,
+      tags: editedSource.tags,
+      summary: editedSource.summary
+    })
+  });
+  const editedApproval = await approve(edited.proposal);
+  assert.equal(editedApproval.response.status, 409);
+  assert.equal(editedApproval.body.code, "stale_source");
+  assert.match(editedApproval.body.error, /重新运行 Agent/);
+
+  const deletedSource = await createSource("Deleted");
+  const deleted = await createCompletedProposal(deletedSource, "deleted");
+  await request(`/entries/${deletedSource.id}`, { method: "DELETE" });
+  const deletedApproval = await approve(deleted.proposal);
+  assert.equal(deletedApproval.response.status, 409);
+  assert.equal(deletedApproval.body.code, "stale_source");
+
+  const seed = await createSource("Deprecation seed");
+  const generatedSourceProposal = await createCompletedProposal(seed, "generated-source");
+  const generatedSourceApproval = await approve(generatedSourceProposal.proposal);
+  assert.equal(generatedSourceApproval.response.status, 200);
+  const generatedSource = generatedSourceApproval.body.entry;
+  const deprecated = await createCompletedProposal(generatedSource, "deprecated");
+  await request(
+    `/knowledge-proposals/${generatedSourceProposal.proposal.id}/undo`,
+    { method: "POST", body: JSON.stringify({ actor: "stale-test" }) }
+  );
+  const deprecatedApproval = await approve(deprecated.proposal);
+  assert.equal(deprecatedApproval.response.status, 409);
+  assert.equal(deprecatedApproval.body.code, "stale_source");
+
+  for (const proposal of [edited.proposal, deleted.proposal, deprecated.proposal]) {
+    const current = (await request(
+      `/agent-runs/${proposal.runId}/proposals`
+    )).body.proposals.find(item => item.id === proposal.id);
+    assert.equal(current.status, "pending");
+    assert.equal(current.approvedEntryId, "");
+  }
+});
+
+test("agent ledger survives OneDrive sync and versioned JSON export/import", async () => {
+  const source = (await request("/entries", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Portable ledger source",
+      content: `Portable evidence ${crypto.randomUUID()}`,
+      project: "Portable"
+    })
+  })).body.entry;
+  const created = await createCompletedProposal(source, "portable", "Portable");
+  const approved = await request(
+    `/knowledge-proposals/${created.proposal.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        approvedBy: "portable-user",
+        idempotencyKey: "portable-idempotency"
+      })
+    }
+  );
+  assert.equal(approved.response.status, 200);
+  await request("/sync", { method: "POST" });
+
+  const peerRoot = path.join(root, "ledger-peer");
+  const peer = await startService(path.join(peerRoot, "data"), oneDrive);
+  try {
+    await request("/sync", { method: "POST" }, peer.url);
+    const peerRun = await request(`/agent-runs/${created.run.id}`, {}, peer.url);
+    const peerProposals = await request(
+      `/agent-runs/${created.run.id}/proposals`,
+      {},
+      peer.url
+    );
+    const peerAudit = await request("/audit?limit=500", {}, peer.url);
+    assert.equal(peerRun.body.run.status, "completed");
+    const peerProposal = peerProposals.body.proposals.find(
+      item => item.id === created.proposal.id
+    );
+    assert.equal(peerProposal.approvedEntryId, approved.body.entry.id);
+    assert.equal(peerProposal.sourceVersions[0].id, source.id);
+    assert.ok(peerAudit.body.events.some(event =>
+      event.proposalId === created.proposal.id &&
+      event.eventType === "approval"
+    ));
+    const peerEntries = await request("/entries", {}, peer.url);
+    assert.ok(peerEntries.body.entries.some(entry =>
+      entry.id === approved.body.entry.id &&
+      entry.provenance.runId === created.run.id
+    ));
+  } finally {
+    await stopService(peer);
+  }
+
+  const exported = await request("/export");
+  assert.equal(exported.body.version, 2);
+  assert.ok(exported.body.agentLedger.runs.some(run => run.id === created.run.id));
+  assert.equal(
+    Object.hasOwn(
+      exported.body.agentLedger.runs.find(run => run.id === created.run.id),
+      "credentials"
+    ),
+    false
+  );
+  const deferredRoot = path.join(root, "ledger-deferred");
+  const deferredService = await startService(
+    path.join(deferredRoot, "data"),
+    path.join(deferredRoot, "onedrive")
+  );
+  try {
+    const deferredHealth = await request("/health", {}, deferredService.url);
+    fs.mkdirSync(deferredHealth.body.cloud.paths.operations, { recursive: true });
+    fs.writeFileSync(
+      path.join(deferredHealth.body.cloud.paths.operations, "ledger-only.json"),
+      JSON.stringify({
+        version: 2,
+        deviceId: "ledger-only",
+        operations: [],
+        agentLedger: exported.body.agentLedger
+      })
+    );
+    const deferredSync = await request(
+      "/sync",
+      { method: "POST" },
+      deferredService.url
+    );
+    assert.equal(deferredSync.body.status, "degraded");
+    assert.match(
+      deferredSync.body.degradedFiles.map(item => item.error).join("\n"),
+      /等待审批知识/
+    );
+    const beforeTarget = await request(
+      `/agent-runs/${created.run.id}/proposals`,
+      {},
+      deferredService.url
+    );
+    assert.equal(
+      beforeTarget.body.proposals.some(item => item.id === created.proposal.id),
+      false
+    );
+    const entriesOnly = await request("/import", {
+      method: "POST",
+      body: JSON.stringify(exported.body)
+    }, deferredService.url);
+    assert.equal(entriesOnly.response.status, 200, entriesOnly.body.error);
+    const converged = await request(
+      "/sync",
+      { method: "POST" },
+      deferredService.url
+    );
+    assert.equal(
+      converged.body.degradedFiles.some(item => /等待审批知识/.test(item.error)),
+      false
+    );
+    assert.ok((await request(
+      `/agent-runs/${created.run.id}/proposals`,
+      {},
+      deferredService.url
+    )).body.proposals.some(item => item.id === created.proposal.id));
+  } finally {
+    await stopService(deferredService);
+  }
+  const importRoot = path.join(root, "ledger-import");
+  const importedService = await startService(
+    path.join(importRoot, "data"),
+    path.join(importRoot, "onedrive")
+  );
+  try {
+    const imported = await request("/import", {
+      method: "POST",
+      body: JSON.stringify(exported.body)
+    }, importedService.url);
+    assert.equal(imported.response.status, 200, imported.body.error);
+    const importedRun = await request(
+      `/agent-runs/${created.run.id}`,
+      {},
+      importedService.url
+    );
+    const importedProposals = await request(
+      `/agent-runs/${created.run.id}/proposals`,
+      {},
+      importedService.url
+    );
+    const importedAudit = await request("/audit?limit=500", {}, importedService.url);
+    assert.equal(importedRun.body.run.status, "completed");
+    assert.ok(importedProposals.body.proposals.some(proposal =>
+      proposal.id === created.proposal.id &&
+      proposal.approvedEntryId === approved.body.entry.id
+    ));
+    assert.ok(importedAudit.body.events.some(event =>
+      event.proposalId === created.proposal.id && event.eventType === "write"
+    ));
+    const sqliteBackup = await request(
+      "/backups",
+      { method: "POST" },
+      importedService.url
+    );
+    const restored = await request("/backups/restore", {
+      method: "POST",
+      body: JSON.stringify({ name: sqliteBackup.body.backup.name })
+    }, importedService.url);
+    assert.equal(restored.response.status, 200, restored.body.error);
+    assert.equal(
+      (await request(`/agent-runs/${created.run.id}`, {}, importedService.url))
+        .body.run.status,
+      "completed"
+    );
+    assert.ok((await request(
+      `/agent-runs/${created.run.id}/proposals`,
+      {},
+      importedService.url
+    )).body.proposals.some(proposal => proposal.id === created.proposal.id));
+    assert.ok((await request("/audit?limit=500", {}, importedService.url))
+      .body.events.some(event => event.proposalId === created.proposal.id));
+
+    const crafted = structuredClone(exported.body);
+    const craftedProposalId = crypto.randomUUID();
+    const portableProposal = crafted.agentLedger.proposals.find(
+      proposal => proposal.id === created.proposal.id
+    );
+    crafted.agentLedger.proposals.push({
+      ...portableProposal,
+      id: craftedProposalId,
+      project: "Outside permission scope",
+      status: "pending",
+      decidedAt: "",
+      approvedEntryId: "",
+      approvedBy: "",
+      undoneAt: ""
+    });
+    const craftedImport = await request("/import", {
+      method: "POST",
+      body: JSON.stringify(crafted)
+    }, importedService.url);
+    assert.equal(craftedImport.response.status, 400);
+    assert.equal(
+      (await request(
+        `/knowledge-proposals/${craftedProposalId}/approve`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            approvedBy: "attacker",
+            idempotencyKey: "crafted"
+          })
+        },
+        importedService.url
+      )).response.status,
+      404
+    );
+
+    const pinTamper = structuredClone(exported.body);
+    pinTamper.agentLedger.proposals.find(
+      proposal => proposal.id === created.proposal.id
+    ).sourceVersions[0].contentHash = "0".repeat(64);
+    assert.equal((await request("/import", {
+      method: "POST",
+      body: JSON.stringify(pinTamper)
+    }, importedService.url)).response.status, 400);
+
+    const emptySourceImport = structuredClone(exported.body);
+    const emptySourceProposal = emptySourceImport.agentLedger.proposals.find(
+      proposal => proposal.id === created.proposal.id
+    );
+    emptySourceProposal.sourceIds = [];
+    emptySourceProposal.sourceVersions = [];
+    assert.equal((await request("/import", {
+      method: "POST",
+      body: JSON.stringify(emptySourceImport)
+    }, importedService.url)).response.status, 400);
+
+    const membershipTamper = structuredClone(exported.body);
+    const membershipProposal = membershipTamper.agentLedger.proposals.find(
+      proposal => proposal.id === created.proposal.id
+    );
+    membershipProposal.sourceIds = ["outside-source"];
+    membershipProposal.sourceVersions = [{
+      id: "outside-source",
+      opId: "outside-device:1",
+      contentHash: "0".repeat(64),
+      lifecycle: "raw",
+      project: "Portable",
+      sourceAt: membershipProposal.createdAt
+    }];
+    assert.equal((await request("/import", {
+      method: "POST",
+      body: JSON.stringify(membershipTamper)
+    }, importedService.url)).response.status, 400);
+
+    const unrelatedTarget = structuredClone(exported.body);
+    const unrelatedProposal = unrelatedTarget.agentLedger.proposals.find(
+      proposal => proposal.id === created.proposal.id
+    );
+    unrelatedProposal.approvedEntryId = source.id;
+    unrelatedProposal.approvalEntryIds = [source.id];
+    const unrelatedResult = await request("/import", {
+      method: "POST",
+      body: JSON.stringify(unrelatedTarget)
+    }, importedService.url);
+    assert.equal(unrelatedResult.response.status, 409);
+    assert.match(unrelatedResult.body.error, /ledger 审批不匹配|canonical|不匹配/);
+
+    const tampered = structuredClone(exported.body);
+    tampered.agentLedger.audit[0].actor = "tampered";
+    const rollbackEntryId = crypto.randomUUID();
+    tampered.entries.push({
+      id: rollbackEntryId,
+      title: "Must roll back",
+      content: `Rollback ${crypto.randomUUID()}`,
+      source: "",
+      project: "",
+      tags: [],
+      summary: "",
+      createdAt: new Date().toISOString(),
+      updatedAt: "",
+      viewCount: 0,
+      lastViewedAt: "",
+      status: "raw",
+      confidence: null,
+      provenance: {},
+      agentRunId: "",
+      approvedBy: "",
+      approvedAt: "",
+      supersedes: [],
+      relations: []
+    });
+    const rejected = await request("/import", {
+      method: "POST",
+      body: JSON.stringify(tampered)
+    }, importedService.url);
+    assert.equal(rejected.response.status, 409, rejected.body.error);
+    assert.equal(
+      (await request("/entries", {}, importedService.url)).body.entries
+        .some(entry => entry.id === rollbackEntryId),
+      false
+    );
+  } finally {
+    await stopService(importedService);
+  }
+});
+
+test("deprecation remains monotonic across peer edits and backup restore", async () => {
+  const createApproved = async suffix => {
+    const source = (await request("/entries", {
+      method: "POST",
+      body: JSON.stringify({
+        title: `Monotonic source ${suffix}`,
+        content: `Monotonic evidence ${suffix} ${crypto.randomUUID()}`,
+        project: "Monotonic"
+      })
+    })).body.entry;
+    const completed = await createCompletedProposal(
+      source,
+      `monotonic-${suffix}`,
+      "Monotonic"
+    );
+    const approval = await request(
+      `/knowledge-proposals/${completed.proposal.id}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          approvedBy: "monotonic-user",
+          entryStatus: "verified",
+          idempotencyKey: `monotonic-${suffix}`
+        })
+      }
+    );
+    return { proposal: completed.proposal, entry: approval.body.entry };
+  };
+  const latestOwnOperation = async entryId => {
+    await request("/sync", { method: "POST" });
+    return JSON.parse(fs.readFileSync(paths.operationFile, "utf8")).operations
+      .filter(operation => operation.entityId === entryId)
+      .at(-1);
+  };
+  const writePeerEdit = (device, entry, baseOperation, content) => {
+    fs.writeFileSync(path.join(paths.operations, `${device}.json`), JSON.stringify({
+      version: 2,
+      deviceId: device,
+      operations: [{
+        payloadVersion: 2,
+        opId: `${device}:1`,
+        deviceId: device,
+        counter: 1,
+        entityId: entry.id,
+        kind: "upsert",
+        vector: { ...baseOperation.vector, [device]: 1 },
+        entry: {
+          ...entry,
+          title: `Peer edit ${device}`,
+          content,
+          updatedAt: new Date().toISOString()
+        },
+        createdAt: new Date().toISOString()
+      }]
+    }));
+  };
+
+  const undoFirst = await createApproved("undo-first");
+  const undoFirstBase = await latestOwnOperation(undoFirst.entry.id);
+  writePeerEdit(
+    "peer-after-undo",
+    undoFirst.entry,
+    undoFirstBase,
+    `Peer concurrent edit ${crypto.randomUUID()}`
+  );
+  await request(`/knowledge-proposals/${undoFirst.proposal.id}/undo`, {
+    method: "POST",
+    body: JSON.stringify({ actor: "monotonic-user" })
+  });
+  await request("/sync", { method: "POST" });
+  let current = (await request("/entries")).body.entries.find(
+    entry => entry.id === undoFirst.entry.id
+  );
+  assert.equal(current.status, "deprecated");
+  await request("/sync", { method: "POST" });
+  current = (await request("/entries")).body.entries.find(
+    entry => entry.id === undoFirst.entry.id
+  );
+  assert.equal(current.status, "deprecated");
+
+  const editFirst = await createApproved("edit-first");
+  const editFirstBase = await latestOwnOperation(editFirst.entry.id);
+  writePeerEdit(
+    "peer-before-undo",
+    editFirst.entry,
+    editFirstBase,
+    `Peer edit before undo ${crypto.randomUUID()}`
+  );
+  await request("/sync", { method: "POST" });
+  const preUndoBackup = await request("/backups", { method: "POST" });
+  const undone = await request(
+    `/knowledge-proposals/${editFirst.proposal.id}/undo`,
+    {
+      method: "POST",
+      body: JSON.stringify({ actor: "monotonic-user" })
+    }
+  );
+  assert.equal(undone.body.entry.status, "deprecated");
+  const restored = await request("/backups/restore", {
+    method: "POST",
+    body: JSON.stringify({ name: preUndoBackup.body.backup.name })
+  });
+  assert.equal(restored.response.status, 200, restored.body.error);
+  current = (await request("/entries")).body.entries.find(
+    entry => entry.id === editFirst.entry.id
+  );
+  assert.equal(current.status, "deprecated");
+  assert.ok((await request("/audit?limit=500")).body.events.some(event =>
+    event.proposalId === editFirst.proposal.id && event.eventType === "undo"
+  ));
+});
+
+test("concurrent device approvals converge to one entry and undo everywhere", async () => {
+  const source = (await request("/entries", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Concurrent approval source",
+      content: `Concurrent approval evidence ${crypto.randomUUID()}`,
+      project: "ConcurrentApproval"
+    })
+  })).body.entry;
+  const completed = await createCompletedProposal(
+    source,
+    "concurrent-approval",
+    "ConcurrentApproval"
+  );
+  await request("/sync", { method: "POST" });
+
+  const peerARoot = path.join(root, "approval-peer-a");
+  const peerBRoot = path.join(root, "approval-peer-b");
+  const peerA = await startService(path.join(peerARoot, "data"), oneDrive);
+  const peerB = await startService(path.join(peerBRoot, "data"), oneDrive);
+  try {
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    const approveOn = (url, actor) => request(
+      `/knowledge-proposals/${completed.proposal.id}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          approvedBy: actor,
+          entryStatus: "verified",
+          idempotencyKey: `approval-${actor}`
+        })
+      },
+      url
+    );
+    const approvedA = await approveOn(peerA.url, "peer-a");
+    const approvedB = await approveOn(peerB.url, "peer-b");
+    assert.equal(approvedA.response.status, 200, approvedA.body.error);
+    assert.equal(approvedB.response.status, 200, approvedB.body.error);
+    assert.equal(approvedA.body.entry.id, approvedB.body.entry.id);
+    assert.match(approvedA.body.entry.id, /^agent-entry-/);
+
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    await request("/sync", { method: "POST" }, peerA.url);
+    for (const peer of [peerA, peerB]) {
+      const proposals = await request(
+        `/agent-runs/${completed.run.id}/proposals`,
+        {},
+        peer.url
+      );
+      const proposal = proposals.body.proposals.find(
+        item => item.id === completed.proposal.id
+      );
+      assert.equal(proposal.approvedEntryId, approvedA.body.entry.id);
+      assert.deepEqual(proposal.approvalEntryIds, [approvedA.body.entry.id]);
+      const entries = await request("/entries", {}, peer.url);
+      assert.equal(
+        entries.body.entries.filter(entry => entry.id === approvedA.body.entry.id).length,
+        1
+      );
+      const approvals = (await request("/audit?limit=500", {}, peer.url)).body.events
+        .filter(event =>
+          event.proposalId === completed.proposal.id &&
+          event.eventType === "approval"
+        );
+      assert.equal(approvals.length, 2);
+    }
+
+    const undone = await request(
+      `/knowledge-proposals/${completed.proposal.id}/undo`,
+      { method: "POST", body: JSON.stringify({ actor: "peer-a" }) },
+      peerA.url
+    );
+    assert.equal(undone.response.status, 200);
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    await request("/sync", { method: "POST" }, peerA.url);
+    for (const peer of [peerA, peerB]) {
+      const entry = (await request("/entries", {}, peer.url)).body.entries.find(
+        item => item.id === approvedA.body.entry.id
+      );
+      assert.equal(entry.status, "deprecated");
+    }
+  } finally {
+    await stopService(peerA);
+    await stopService(peerB);
+  }
+});
+
+test("approved proposal dominates concurrent rejection in both arrival orders", async () => {
+  const source = (await request("/entries", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Decision race source",
+      content: `Decision race evidence ${crypto.randomUUID()}`,
+      project: "DecisionRace"
+    })
+  })).body.entry;
+  const completed = await createCompletedProposal(
+    source,
+    "decision-race",
+    "DecisionRace"
+  );
+  await request("/sync", { method: "POST" });
+  const approvalRoot = path.join(root, "decision-approved");
+  const rejectionRoot = path.join(root, "decision-rejected");
+  const approvalPeer = await startService(
+    path.join(approvalRoot, "data"),
+    oneDrive
+  );
+  const rejectionPeer = await startService(
+    path.join(rejectionRoot, "data"),
+    oneDrive
+  );
+  try {
+    for (const peer of [approvalPeer, rejectionPeer]) {
+      await request("/sync", { method: "POST" }, peer.url);
+    }
+    const approved = await request(
+      `/knowledge-proposals/${completed.proposal.id}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          approvedBy: "approval-peer",
+          idempotencyKey: "decision-race-approval"
+        })
+      },
+      approvalPeer.url
+    );
+    const rejected = await request(
+      `/knowledge-proposals/${completed.proposal.id}/reject`,
+      {
+        method: "POST",
+        body: JSON.stringify({ rejectedBy: "rejection-peer" })
+      },
+      rejectionPeer.url
+    );
+    assert.equal(approved.response.status, 200);
+    assert.equal(rejected.response.status, 200);
+
+    await request("/sync", { method: "POST" }, rejectionPeer.url);
+    await request("/sync", { method: "POST" }, approvalPeer.url);
+    await request("/sync", { method: "POST" }, rejectionPeer.url);
+
+    for (const peer of [approvalPeer, rejectionPeer]) {
+      const proposal = (await request(
+        `/agent-runs/${completed.run.id}/proposals`,
+        {},
+        peer.url
+      )).body.proposals.find(item => item.id === completed.proposal.id);
+      assert.equal(proposal.status, "approved");
+      assert.equal(proposal.approvedEntryId, approved.body.entry.id);
+      assert.ok(proposal.approvalEntryIds.includes(approved.body.entry.id));
+      const entry = (await request("/entries", {}, peer.url)).body.entries.find(
+        item => item.id === approved.body.entry.id
+      );
+      assert.ok(entry);
+      assert.notEqual(entry.status, "deprecated");
+      const conflictEvents = (await request("/audit?limit=500", {}, peer.url))
+        .body.events.filter(event =>
+          event.proposalId === completed.proposal.id &&
+          event.details.action === "competing-rejection-preserved-approval"
+        );
+      assert.equal(conflictEvents.length, 1);
+      assert.equal(conflictEvents[0].details.approvedEntryId, approved.body.entry.id);
+    }
+  } finally {
+    await stopService(approvalPeer);
+    await stopService(rejectionPeer);
+  }
+});
+
+test("distinct proposals with identical content share canonical entry and undo by reference", async () => {
+  const source = (await request("/entries", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Shared content source",
+      content: `Shared evidence ${crypto.randomUUID()}`,
+      project: "SharedContent"
+    })
+  })).body.entry;
+  const sharedContent = `Identical approved knowledge ${crypto.randomUUID()}`;
+  const makeProposal = async suffix => {
+    const run = await request("/agent-runs", {
+      method: "POST",
+      body: JSON.stringify({
+        goal: `Shared ${suffix}`,
+        outputFormat: "report",
+        provider: "browser",
+        sourceIds: [source.id],
+        permissionScope: { project: "SharedContent" }
+      })
+    });
+    await request(`/agent-runs/${run.body.run.id}/start`, {
+      method: "POST", body: "{}"
+    });
+    const proposal = await request(`/agent-runs/${run.body.run.id}/proposals`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Shared approved title",
+        content: sharedContent,
+        summary: "",
+        project: "SharedContent",
+        tags: ["shared"],
+        sourceIds: [source.id],
+        confidence: 0.8,
+        rationale: "Same conclusion"
+      })
+    });
+    await request(`/agent-runs/${run.body.run.id}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ result: "Shared [K1]" })
+    });
+    return { run: run.body.run, proposal: proposal.body.proposal };
+  };
+  const first = await makeProposal("one");
+  const second = await makeProposal("two");
+  await request("/sync", { method: "POST" });
+  const rootA = path.join(root, "shared-content-a");
+  const rootB = path.join(root, "shared-content-b");
+  const peerA = await startService(path.join(rootA, "data"), oneDrive);
+  const peerB = await startService(path.join(rootB, "data"), oneDrive);
+  try {
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    const approveAt = (peer, proposal, actor) => request(
+      `/knowledge-proposals/${proposal.id}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          approvedBy: actor,
+          idempotencyKey: `shared-${actor}`
+        })
+      },
+      peer.url
+    );
+    assert.equal((await approveAt(peerA, first.proposal, "a")).response.status, 200);
+    assert.equal((await approveAt(peerB, second.proposal, "b")).response.status, 200);
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    const bundleA = (await request("/export", {}, peerA.url)).body;
+    const bundleB = (await request("/export", {}, peerB.url)).body;
+    const importB = await request("/import", {
+      method: "POST", body: JSON.stringify(bundleB)
+    }, peerA.url);
+    const importA = await request("/import", {
+      method: "POST", body: JSON.stringify(bundleA)
+    }, peerB.url);
+    assert.equal(importB.response.status, 200, importB.body.error);
+    assert.equal(importA.response.status, 200, importA.body.error);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await request("/sync", { method: "POST" }, peerA.url);
+      await request("/sync", { method: "POST" }, peerB.url);
+    }
+
+    const proposalAt = async (peer, value) => (await request(
+      `/agent-runs/${value.run.id}/proposals`, {}, peer.url
+    )).body.proposals.find(item => item.id === value.proposal.id);
+    const firstA = await proposalAt(peerA, first);
+    const secondA = await proposalAt(peerA, second);
+    assert.equal(firstA.approvedEntryId, secondA.approvedEntryId);
+    assert.match(firstA.approvedEntryId, /^agent-content-/);
+    for (const peer of [peerA, peerB]) {
+      const status = await request("/sync/status", {}, peer.url);
+      assert.equal(
+        status.body.degradedFiles.some(item => /等待审批知识/.test(item.error)),
+        false
+      );
+    }
+    await request(`/knowledge-proposals/${first.proposal.id}/undo`, {
+      method: "POST", body: JSON.stringify({ actor: "a" })
+    }, peerA.url);
+    let shared = (await request("/entries", {}, peerA.url)).body.entries.find(
+      item => item.id === firstA.approvedEntryId
+    );
+    assert.notEqual(shared.status, "deprecated");
+    await request("/sync", { method: "POST" }, peerA.url);
+    await request("/sync", { method: "POST" }, peerB.url);
+    const afterFirstUndo = (await request("/export", {}, peerA.url)).body;
+    await request("/import", {
+      method: "POST", body: JSON.stringify(afterFirstUndo)
+    }, peerB.url);
+    await request(`/knowledge-proposals/${second.proposal.id}/undo`, {
+      method: "POST", body: JSON.stringify({ actor: "b" })
+    }, peerB.url);
+    shared = (await request("/entries", {}, peerB.url)).body.entries.find(
+      item => item.id === firstA.approvedEntryId
+    );
+    assert.equal(shared.status, "deprecated");
+  } finally {
+    await stopService(peerA);
+    await stopService(peerB);
+  }
 });
 
 test("remote operation logs import entries", async () => {
@@ -1093,7 +2490,8 @@ test("invalid operation files are isolated while healthy logs continue", async (
   assert.equal(synced.body.status, "degraded");
   assert.deepEqual(
     synced.body.degradedFiles.map(item => item.name).sort(),
-    ["malformed-device.json", "unsupported-device.json"]
+    ["malformed-device.json", "unsupported-device.json"],
+    JSON.stringify(synced.body.degradedFiles)
   );
   const listed = await request("/entries");
   assert.ok(listed.body.entries.some(entry => entry.id === healthyId));
@@ -1292,11 +2690,10 @@ test("concurrent operations resolve deterministically and persist a conflict", a
 
   await request(`/entries/${id}`, {
     method: "PUT",
-    body: JSON.stringify({
-      ...created.body.entry,
+    body: JSON.stringify(editableEntry(created.body.entry, {
       title: "Local concurrent title",
       content: "Local concurrent content"
-    })
+    }))
   });
   const remoteEntry = {
     ...created.body.entry,
@@ -1476,11 +2873,10 @@ test("losing concurrent duplicates are annotated and resolve either way", async 
       .at(-1);
     await request(`/entries/${target.body.entry.id}`, {
       method: "PUT",
-      body: JSON.stringify({
-        ...target.body.entry,
+      body: JSON.stringify(editableEntry(target.body.entry, {
         title: `Local winner ${index}`,
         content: `Local winner content ${index}`
-      })
+      }))
     });
     const incoming = {
       opId: `${losingDevice}:${index}`,
@@ -1568,10 +2964,9 @@ test("backup creation, listing, and safe restore preserve the selected state", a
 
   await request(`/entries/${baseline.body.entry.id}`, {
     method: "PUT",
-    body: JSON.stringify({
-      ...baseline.body.entry,
+    body: JSON.stringify(editableEntry(baseline.body.entry, {
       title: "Changed after backup"
-    })
+    }))
   });
   const later = await request("/entries", {
     method: "POST",
@@ -1748,10 +3143,9 @@ test("post-restore failure publishes no authoritative operations", async () => {
   const manual = await request("/backups", { method: "POST" }, faulted.url);
   await request(`/entries/${baseline.body.entry.id}`, {
     method: "PUT",
-    body: JSON.stringify({
-      ...baseline.body.entry,
+    body: JSON.stringify(editableEntry(baseline.body.entry, {
       title: "State before failed restore"
-    })
+    }))
   }, faulted.url);
   const health = await request("/health", {}, faulted.url);
   await request("/sync", { method: "POST" }, faulted.url);
@@ -1794,10 +3188,9 @@ test("replacement rename failure preserves the active database", async () => {
     const manual = await request("/backups", { method: "POST" }, faulted.url);
     await request(`/entries/${baseline.body.entry.id}`, {
       method: "PUT",
-      body: JSON.stringify({
-        ...baseline.body.entry,
+      body: JSON.stringify(editableEntry(baseline.body.entry, {
         title: "Active database remains"
-      })
+      }))
     }, faulted.url);
     const health = await request("/health", {}, faulted.url);
     await request("/sync", { method: "POST" }, faulted.url);

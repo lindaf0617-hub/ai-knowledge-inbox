@@ -19,6 +19,46 @@ It provides:
 - Chinese and English UI
 - Markdown and JSON export
 
+## Knowledge Agent (approval-gated writes)
+
+Open **Knowledge Agent** from the library to choose a goal, output format,
+project/time scope, and either the browser's built-in AI or local Ollama. The
+page shows the local retrieval plan, scores, and excerpts before execution.
+Only an explicit **Run Agent** click invokes the selected local provider.
+Analysis and candidate cards are separate, and every card requires an
+individual approval or rejection; model output is never written automatically.
+
+Approved cards default to `draft` and may be explicitly marked `verified`.
+Writes retain source IDs, confidence, rationale, provider/model, and run ID.
+Undo marks the entry `deprecated` rather than deleting provenance or immutable
+audit history. Existing entries migrate to `raw`. External supplementation is
+disabled and not implemented; no new network access is used beyond the selected
+local provider and manual GitHub updates.
+
+OneDrive v2 operation logs and version 2 JSON exports carry the complete Agent
+ledger (runs, proposals, and append-only audit events), but never provider
+credentials or keys. SQLite backups are complete point-in-time database images;
+JSON is a validated portable logical export, while OneDrive performs
+incremental multi-device merging.
+The Agent pins source versions, content hashes, and lifecycle at plan creation;
+changes during model execution require proposal regeneration. `deprecated` is
+monotonic: ordinary edits, sync merges, and backup restores cannot reactivate it.
+Planning also returns complete server-pinned source snapshots, and only those
+snapshots are sent to the provider. Concurrent device approvals derive one
+deterministic entry ID from the proposal ID; sync merges approval links and undo
+deprecates every linked write. Runs and proposals require at least one unique
+source.
+When approval races rejection, an approval that produced knowledge wins
+monotonically and an immutable conflict audit is retained. Replanning clears old
+output, and proposal actions are guarded by both run ID and UI generation.
+Agent-approved knowledge cannot be changed through ordinary editing; create and
+approve a new proposal instead. Source pins use a separate semantic revision and
+hash, so view telemetry does not stale a plan. Approval ledger records arriving
+before their entry are deferred and converge on a later sync.
+Agent-approved entries also cannot be deleted directly: the library exposes
+**Undo approval**, which uses transactional undo. Version 2 ledgers require the
+proposal-derived deterministic canonical entry ID as the approval target.
+
 ---
 
 ![Knowledge library](store-assets/screenshot-library.png)

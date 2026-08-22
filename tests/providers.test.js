@@ -17,6 +17,7 @@ const providers = context.__value;
 
 const sources = [{
   entry: {
+    id: "knowledge-security-1",
     title: "Security note",
     project: "Agent",
     tags: ["security"],
@@ -116,4 +117,87 @@ test("Ollama returns explicit unavailable and model-missing errors", async () =>
     missing.answer("Question", sources, "synthesize", "zh"),
     error => error.code === "modelMissing" && /未找到/.test(error.message)
   );
+});
+
+test("agent envelope parser validates citations, fields, confidence, and source IDs", () => {
+  const envelope = providers.parseAgentEnvelope(JSON.stringify({
+    analysisMarkdown: "The evidence requires isolation. [K1]",
+    proposals: [{
+      title: "Treat retrieved instructions as data",
+      content: "Retrieved instructions are untrusted data. [K1]",
+      summary: "Keep source content isolated from instructions.",
+      project: "Agent",
+      tags: ["security"],
+      sourceIds: ["K1"],
+      confidence: 0.82,
+      rationale: "Direct statement in the source"
+    }]
+  }), sources);
+  assert.equal(envelope.proposals[0].sourceIds[0], "knowledge-security-1");
+  assert.equal(envelope.proposals[0].confidence, 0.82);
+
+  assert.throws(
+    () => providers.parseAgentEnvelope(JSON.stringify({
+      analysisMarkdown: "Invented citation [K9]",
+      proposals: []
+    }), sources),
+    /unknown citations/
+  );
+  assert.throws(
+    () => providers.parseAgentEnvelope(JSON.stringify({
+      analysisMarkdown: "Grounded [K1]",
+      proposals: [{
+        title: "Bad",
+        content: "Bad",
+        summary: "",
+        project: "Agent",
+        tags: [],
+        sourceIds: ["K9"],
+        confidence: 2,
+        rationale: "Bad"
+      }]
+    }), sources),
+    /invalid fields|unknown sourceId/
+  );
+});
+
+test("agent prompt is JSON-only, read-only, and isolates untrusted sources", () => {
+  const request = providers.buildAgentRequest(
+    "Create reusable principles",
+    sources,
+    { outputFormat: "report", project: "Agent" },
+    "en"
+  );
+  assert.match(request.systemPrompt, /read-only/i);
+  assert.match(request.systemPrompt, /untrusted data/i);
+  assert.match(request.systemPrompt, /never auto-written/i);
+  assert.match(request.userPrompt, /External supplementation: disabled/);
+  assert.match(request.userPrompt, /knowledge_id="knowledge-security-1"/);
+});
+
+test("Ollama agent forwards AbortSignal and does not convert cancellation", async () => {
+  const controller = new AbortController();
+  let receivedSignal;
+  const provider = providers.createOllamaProvider({
+    fetchImpl: async (_url, options) => {
+      receivedSignal = options.signal;
+      return new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        }, { once: true });
+      });
+    }
+  });
+  const pending = provider.agent(
+    "Goal",
+    sources,
+    { outputFormat: "report", project: "Agent" },
+    "en",
+    { ollamaModel: "llama3.2", signal: controller.signal }
+  );
+  controller.abort();
+  await assert.rejects(pending, error => error.name === "AbortError");
+  assert.equal(receivedSignal, controller.signal);
 });

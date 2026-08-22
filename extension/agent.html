@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Knowledge Agent</title>
+  <script src="theme.js"></script>
+  <script src="i18n.js"></script>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    .app { width: min(1000px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 64px; }
+    header, .panel { margin-bottom: 18px; padding: 22px; border: 1px solid var(--cp-border); border-radius: 16px; background: var(--cp-surface); }
+    header { display: flex; justify-content: space-between; gap: 18px; border-left: 6px solid var(--cp-accent); }
+    h1, h2, h3 { margin-top: 0; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    label { display: grid; gap: 6px; color: var(--cp-text-muted); }
+    textarea { min-height: 110px; }
+    .wide { grid-column: 1 / -1; }
+    .safety { padding: 12px 14px; border-left: 4px solid var(--cp-warning); background: var(--cp-accent-soft); }
+    .source, .proposal { margin: 10px 0; padding: 14px; border: 1px solid var(--cp-border); border-radius: 12px; }
+    .source p, .proposal p { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .meta { color: var(--cp-text-muted); font-size: 12px; }
+    .hidden { display: none !important; }
+    .status { min-height: 1.5em; color: var(--cp-text-muted); }
+    .markdown-body { line-height: 1.7; overflow-wrap: anywhere; }
+    .proposal.approved { border-color: var(--cp-success); }
+    .proposal.rejected { opacity: .65; }
+    .danger { color: var(--cp-danger); }
+    input[type="checkbox"] { width: auto; }
+    @media (max-width: 680px) { .grid { grid-template-columns: 1fr; } header { flex-direction: column; } }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div>
+        <h1>Knowledge Agent</h1>
+        <p>本地检索、明确审批、可追溯写入。</p>
+      </div>
+      <div class="actions">
+        <select class="language-picker" id="languagePicker" aria-label="界面语言">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+        <button class="button" id="backButton" type="button">返回知识库</button>
+      </div>
+    </header>
+
+    <section class="panel">
+      <p class="safety"><strong>默认只读：</strong>Agent 只生成分析和候选卡。模型输出是不可信建议，绝不会自动写入；每张卡必须由你审批。外部搜索不可用。</p>
+      <form id="agentForm" class="grid">
+        <label class="wide">目标
+          <textarea id="goal" maxlength="1200" required placeholder="例如：总结 Agent 安全资料并形成三条可复用原则"></textarea>
+        </label>
+        <label>输出格式
+          <select id="outputFormat">
+            <option value="report">分析报告</option>
+            <option value="brief">简报</option>
+            <option value="actions">行动清单</option>
+            <option value="comparison">对比分析</option>
+          </select>
+        </label>
+        <label>项目范围
+          <select id="project"><option value="">全部项目</option></select>
+        </label>
+        <label>时间范围
+          <select id="timeRange">
+            <option value="all">全部时间</option>
+            <option value="7">近 7 天</option>
+            <option value="30">近 30 天</option>
+            <option value="365">近一年</option>
+          </select>
+        </label>
+        <label>AI 提供方
+          <select id="provider">
+            <option value="browser">浏览器内置 Prompt API</option>
+            <option value="ollama">本地 Ollama</option>
+          </select>
+        </label>
+        <label id="modelLabel">Ollama 模型
+          <input id="model" maxlength="80" value="llama3.2">
+        </label>
+        <label>
+          <span>外部资料补充（未来功能）</span>
+          <span><input type="checkbox" disabled> 尚未实现 / Not implemented</span>
+        </label>
+        <div class="wide actions">
+          <button class="button primary" type="submit">生成计划</button>
+          <button class="button hidden" id="runButton" type="button">运行 Agent</button>
+          <button class="button hidden" id="cancelButton" type="button">取消运行</button>
+        </div>
+      </form>
+      <div class="status" id="status" role="status"></div>
+    </section>
+
+    <section class="panel hidden" id="planPanel">
+      <h2>执行前确认</h2>
+      <p id="planSummary"></p>
+      <div id="sources"></div>
+    </section>
+
+    <section class="panel hidden" id="resultPanel">
+      <h2>最终分析</h2>
+      <div class="markdown-body" id="analysis"></div>
+    </section>
+
+    <section class="panel hidden" id="proposalPanel">
+      <h2>候选知识卡</h2>
+      <p class="meta">逐条审批。批准后默认写入 draft；可明确选择 verified。撤销采用 deprecated 墓碑策略，保留 provenance 与审计记录。</p>
+      <div id="proposals"></div>
+    </section>
+  </main>
+  <script src="storage.js"></script>
+  <script src="semantic.js"></script>
+  <script src="retrieval.js"></script>
+  <script src="markdown.js"></script>
+  <script src="providers.js"></script>
+  <script src="browser-ai.js"></script>
+  <script src="agent-state.js"></script>
+  <script src="agent.js"></script>
+</body>
+</html>

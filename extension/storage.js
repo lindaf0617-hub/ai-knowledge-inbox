@@ -3,6 +3,7 @@ const KnowledgeStore = (() => {
   let backend = "unknown";
   let migrationPromise = null;
   const TOKEN_KEY = "desktopApiToken";
+  const LEDGER_KEY = "agentLedger";
   const AUTH_DOMAIN = "AIKnowledgeInbox.LocalAPI.AuthChallenge";
   const AUTH_PROTOCOL = 1;
   const SERVICE_PROTOCOL_VERSION = "1.0.0";
@@ -40,6 +41,9 @@ const KnowledgeStore = (() => {
   }
 
   function normalizeEntry(entry) {
+    const confidence = entry.confidence === null || entry.confidence === undefined
+      ? null
+      : Number(entry.confidence);
     return {
       ...entry,
       source: typeof entry.source === "string" ? entry.source : "",
@@ -48,7 +52,24 @@ const KnowledgeStore = (() => {
       updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
       summary: typeof entry.summary === "string" ? entry.summary.trim() : "",
       viewCount: Number.isInteger(entry.viewCount) && entry.viewCount >= 0 ? entry.viewCount : 0,
-      lastViewedAt: typeof entry.lastViewedAt === "string" ? entry.lastViewedAt : ""
+      lastViewedAt: typeof entry.lastViewedAt === "string" ? entry.lastViewedAt : "",
+      status: ["raw", "draft", "verified", "deprecated"].includes(entry.status)
+        ? entry.status
+        : "raw",
+      confidence: Number.isFinite(confidence) && confidence >= 0 && confidence <= 1
+        ? confidence
+        : null,
+      provenance: entry.provenance && typeof entry.provenance === "object" &&
+        !Array.isArray(entry.provenance) ? entry.provenance : {},
+      agentRunId: typeof entry.agentRunId === "string" ? entry.agentRunId : "",
+      approvedBy: typeof entry.approvedBy === "string" ? entry.approvedBy : "",
+      approvedAt: typeof entry.approvedAt === "string" ? entry.approvedAt : "",
+      supersedes: Array.isArray(entry.supersedes)
+        ? entry.supersedes.map(String).filter(Boolean).slice(0, 50)
+        : [],
+      relations: Array.isArray(entry.relations)
+        ? entry.relations.map(String).filter(Boolean).slice(0, 100)
+        : []
     };
   }
 
@@ -264,13 +285,17 @@ const KnowledgeStore = (() => {
   async function migrateLocalEntries() {
     if (migrationPromise) return migrationPromise;
     migrationPromise = (async () => {
+      const stored = await chrome.storage.local.get({ [LEDGER_KEY]: null });
       const localEntries = await getLocalEntries();
-      if (localEntries.length) {
+      if (localEntries.length || stored[LEDGER_KEY]) {
         await serverRequest("/import", {
           method: "POST",
-          body: JSON.stringify({ entries: localEntries })
+          body: JSON.stringify({
+            entries: localEntries,
+            ...(stored[LEDGER_KEY] ? { agentLedger: stored[LEDGER_KEY] } : {})
+          })
         });
-        await chrome.storage.local.set({ entries: [] });
+        await chrome.storage.local.set({ entries: [], [LEDGER_KEY]: null });
       }
       backend = "server";
     })();
@@ -333,7 +358,15 @@ const KnowledgeStore = (() => {
           summary: String(input.summary || "").trim(),
           createdAt: new Date().toISOString(),
           viewCount: 0,
-          lastViewedAt: ""
+          lastViewedAt: "",
+          status: input.status || "raw",
+          confidence: input.confidence ?? null,
+          provenance: input.provenance || {},
+          agentRunId: input.agentRunId || "",
+          approvedBy: input.approvedBy || "",
+          approvedAt: input.approvedAt || "",
+          supersedes: input.supersedes || [],
+          relations: input.relations || []
         });
         await chrome.storage.local.set({ entries: [entry, ...entries] });
         return entry;
@@ -381,7 +414,15 @@ const KnowledgeStore = (() => {
           project: String(input.project || "").trim(),
           tags: normalizeTags(input.tags),
           summary: String(input.summary || "").trim(),
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date().toISOString(),
+          status: input.status ?? entries[index].status,
+          confidence: input.confidence ?? entries[index].confidence,
+          provenance: input.provenance ?? entries[index].provenance,
+          agentRunId: input.agentRunId ?? entries[index].agentRunId,
+          approvedBy: input.approvedBy ?? entries[index].approvedBy,
+          approvedAt: input.approvedAt ?? entries[index].approvedAt,
+          supersedes: input.supersedes ?? entries[index].supersedes,
+          relations: input.relations ?? entries[index].relations
         });
         entries[index] = updated;
         await chrome.storage.local.set({ entries });
@@ -414,7 +455,7 @@ const KnowledgeStore = (() => {
     }
   }
 
-  async function importEntries(incoming) {
+  async function importEntries(incoming, agentLedger) {
     if (!Array.isArray(incoming) || !incoming.every(isValidEntry)) {
       throw new Error("备份格式不正确");
     }
@@ -422,7 +463,10 @@ const KnowledgeStore = (() => {
       await migrateLocalEntries();
       const result = await serverRequest("/import", {
         method: "POST",
-        body: JSON.stringify({ entries: incoming })
+        body: JSON.stringify({
+          entries: incoming,
+          ...(agentLedger ? { agentLedger } : {})
+        })
       });
       backend = "server";
       return result.imported;
@@ -439,7 +483,10 @@ const KnowledgeStore = (() => {
           .map(normalizeEntry);
         const merged = [...additions, ...entries]
           .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        await chrome.storage.local.set({ entries: merged });
+        await chrome.storage.local.set({
+          entries: merged,
+          ...(agentLedger ? { [LEDGER_KEY]: agentLedger } : {})
+        });
         return additions.length;
       });
     }
@@ -572,22 +619,101 @@ const KnowledgeStore = (() => {
     return true;
   }
 
+  async function agentRequest(path, options = {}) {
+    await migrateLocalEntries();
+    const result = await serverRequest(path, options);
+    backend = "server";
+    return result;
+  }
+
+  async function createAgentRun(input) {
+    return (await agentRequest("/agent-runs", {
+      method: "POST",
+      body: JSON.stringify(input)
+    })).run;
+  }
+
+  async function listAgentRuns() {
+    return (await agentRequest("/agent-runs")).runs || [];
+  }
+
+  async function getAgentRun(id) {
+    return (await agentRequest(`/agent-runs/${encodeURIComponent(id)}`)).run;
+  }
+
+  async function transitionAgentRun(id, action, input = {}) {
+    return (await agentRequest(
+      `/agent-runs/${encodeURIComponent(id)}/${action}`,
+      { method: "POST", body: JSON.stringify(input) }
+    )).run;
+  }
+
+  async function createProposal(runId, input) {
+    return (await agentRequest(
+      `/agent-runs/${encodeURIComponent(runId)}/proposals`,
+      { method: "POST", body: JSON.stringify(input) }
+    )).proposal;
+  }
+
+  async function listProposals(runId) {
+    return (await agentRequest(
+      `/agent-runs/${encodeURIComponent(runId)}/proposals`
+    )).proposals || [];
+  }
+
+  async function decideProposal(id, action, input = {}) {
+    return agentRequest(
+      `/knowledge-proposals/${encodeURIComponent(id)}/${action}`,
+      { method: "POST", body: JSON.stringify(input) }
+    );
+  }
+
+  async function listAudit(limit = 100) {
+    return (await agentRequest(`/audit?limit=${encodeURIComponent(limit)}`)).events || [];
+  }
+
+  async function exportBundle() {
+    try {
+      return await agentRequest("/export");
+    } catch (error) {
+      return useFallback(error, async () => ({
+        app: "AI Knowledge Inbox",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        entries: await getLocalEntries(),
+        ...((await chrome.storage.local.get({ [LEDGER_KEY]: null }))[LEDGER_KEY]
+          ? { agentLedger:
+              (await chrome.storage.local.get({ [LEDGER_KEY]: null }))[LEDGER_KEY] }
+          : {})
+      }));
+    }
+  }
+
   return {
     addEntry,
+    createAgentRun,
+    createProposal,
     currentBackend: () => backend,
     deleteEntry,
+    decideProposal,
     deriveTitle,
+    exportBundle,
+    getAgentRun,
     getBackendStatus,
     getCloudStatus,
     getEntries,
     getVersionStatus,
     importEntries,
     isValidEntry,
+    listAgentRuns,
+    listAudit,
+    listProposals,
     normalizeTags,
     pairDesktop,
     recordView,
     suggestTags,
     syncCloud,
+    transitionAgentRun,
     updateEntry
   };
 })();

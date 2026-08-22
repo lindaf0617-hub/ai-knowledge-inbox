@@ -99,5 +99,29 @@ const BrowserAI = (() => {
     }
   }
 
-  return { answer, getStatus, organize };
+  async function agent(goal, sources, options = {}, language = "zh", config = {}) {
+    if (config.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const provider = getLanguageModel();
+    if (!provider || typeof provider.model.create !== "function") {
+      throw new Error("当前浏览器未启用内置 AI，请使用支持 Prompt API 的 Chrome/Edge 版本");
+    }
+    const status = await availability(provider.model);
+    if (status === "unavailable" || status === "no") {
+      throw new Error("当前设备不支持浏览器内置 AI");
+    }
+    const request = ProviderCore.buildAgentRequest(goal, sources, options, language);
+    let session;
+    try {
+      session = await provider.model.create(
+        createOptions(provider.api, request.systemPrompt)
+      );
+      const result = await session.prompt(request.userPrompt);
+      if (config.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      return ProviderCore.parseAgentEnvelope(result, sources);
+    } finally {
+      if (session && typeof session.destroy === "function") session.destroy();
+    }
+  }
+
+  return { agent, answer, getStatus, organize };
 })();

@@ -104,6 +104,7 @@ const RetrievalGrounding = (() => {
   function retrieve(question, entries, similarity, limit = 8) {
     const normalizedQuestion = normalizeQuery(question);
     return entries
+      .filter(entry => entry.status !== "deprecated")
       .map(entry => {
         const semantic = clamp(similarity(normalizedQuestion, entry));
         const keyword = keywordScore(normalizedQuestion, entry);

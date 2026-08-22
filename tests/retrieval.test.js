@@ -64,6 +64,17 @@ test("normalized retrieval score is bounded", () => {
   assert.equal(retrieval.normalizeScore(4, 100), 1);
 });
 
+test("deprecated knowledge is excluded from retrieval", () => {
+  const results = retrieval.retrieve("security", [{
+    id: "deprecated-1",
+    title: "Security",
+    content: "security guidance",
+    status: "deprecated",
+    tags: []
+  }], () => 1);
+  assert.equal(results.length, 0);
+});
+
 test("retrieval truncates overlong questions before similarity", () => {
   const observed = [];
   retrieval.retrieve(

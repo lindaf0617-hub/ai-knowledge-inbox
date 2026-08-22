@@ -453,9 +453,17 @@ function render() {
     const remove = document.createElement("button");
     remove.className = "text-button";
     remove.type = "button";
-    remove.textContent = "删除";
-    remove.addEventListener("click", () => removeEntry(entry.id));
-    actions.append(exportButton, previewButton, view, remove);
+    const approvalProposalId = entry.provenance?.origin === "agent" &&
+      entry.approvedAt ? entry.provenance.proposalId : "";
+    if (approvalProposalId && entry.status !== "deprecated") {
+      remove.textContent = "撤销审批";
+      remove.addEventListener("click", () => undoApprovedEntry(entry));
+    } else {
+      remove.textContent = "删除";
+      remove.addEventListener("click", () => removeEntry(entry.id));
+    }
+    actions.append(exportButton, previewButton, view);
+    if (!(approvalProposalId && entry.status === "deprecated")) actions.append(remove);
     footer.append(meta, actions);
     card.append(title);
     if (taxonomy.childElementCount) card.append(taxonomy);
@@ -468,6 +476,12 @@ function render() {
 function createTaxonomy(entry) {
   const taxonomy = document.createElement("div");
   taxonomy.className = "taxonomy";
+  if (entry.status && entry.status !== "raw") {
+    const status = document.createElement("span");
+    status.className = "chip";
+    status.textContent = entry.status;
+    taxonomy.append(status);
+  }
   if (entry.project) {
     const project = document.createElement("span");
     project.className = "chip project";
@@ -539,6 +553,22 @@ async function removeEntry(id) {
   showToast("已删除");
 }
 
+async function undoApprovedEntry(entry) {
+  const proposalId = entry.provenance?.proposalId;
+  if (!proposalId) {
+    showToast(I18n.t("此审批知识缺少候选关联，无法撤销"));
+    return;
+  }
+  try {
+    await KnowledgeStore.decideProposal(proposalId, "undo", { actor: "local-user" });
+    state.entries = await KnowledgeStore.getEntries();
+    render();
+    showToast(I18n.t("审批已撤销，知识已标记 deprecated"));
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
 function showToast(message) {
   elements.toast.textContent = I18n.t(message);
   elements.toast.classList.add("show");
@@ -566,6 +596,14 @@ function entryMarkdown(entry, includeTitle = true) {
     `source: ${yamlValue(entry.source)}`,
     `project: ${yamlValue(entry.project)}`,
     `tags: [${entry.tags.map(yamlValue).join(", ")}]`,
+    `status: ${yamlValue(entry.status || "raw")}`,
+    `confidence: ${entry.confidence === null ? "null" : entry.confidence}`,
+    `agentRunId: ${yamlValue(entry.agentRunId)}`,
+    `approvedBy: ${yamlValue(entry.approvedBy)}`,
+    `approvedAt: ${yamlValue(entry.approvedAt)}`,
+    `supersedes: [${(entry.supersedes || []).map(yamlValue).join(", ")}]`,
+    `relations: [${(entry.relations || []).map(yamlValue).join(", ")}]`,
+    `provenance: ${yamlValue(JSON.stringify(entry.provenance || {}))}`,
     "---",
     ""
   ];
@@ -621,13 +659,14 @@ function exportAllMarkdown() {
   showToast(`已导出 ${entries.length} 条知识`);
 }
 
-function exportBackup() {
-  const payload = {
-    app: "AI Knowledge Inbox",
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    entries: state.entries
-  };
+async function exportBackup() {
+  let payload;
+  try {
+    payload = await KnowledgeStore.exportBundle();
+  } catch (error) {
+    showToast(error.message);
+    return;
+  }
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -644,7 +683,10 @@ async function importBackup(file) {
   try {
     const parsed = JSON.parse(await file.text());
     const incoming = Array.isArray(parsed) ? parsed : parsed.entries;
-    const count = await KnowledgeStore.importEntries(incoming);
+    if (parsed.version !== undefined && ![1, 2].includes(parsed.version)) {
+      throw new Error("Unsupported backup version");
+    }
+    const count = await KnowledgeStore.importEntries(incoming, parsed.agentLedger);
     state.entries = await KnowledgeStore.getEntries();
     render();
     showToast(`已导入 ${count} 条新知识`);
@@ -719,6 +761,9 @@ document.getElementById("organizeButton").addEventListener("click", async event 
 document.getElementById("exportMarkdownButton").addEventListener("click", exportAllMarkdown);
 document.getElementById("askButton").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("ask.html") });
+});
+document.getElementById("agentButton").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("agent.html") });
 });
 document.getElementById("syncButton").addEventListener("click", async event => {
   const button = event.currentTarget;

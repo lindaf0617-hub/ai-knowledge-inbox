@@ -39,7 +39,7 @@ const SYNC_DIR = ONEDRIVE_ROOT
 const SYNC_FILE = SYNC_DIR ? path.join(SYNC_DIR, "knowledge-sync.json") : "";
 const OPERATIONS_DIR = SYNC_DIR ? path.join(SYNC_DIR, "operations") : "";
 const DEVICE_FILE = path.join(DATA_DIR, "device-id.txt");
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 9;
 const BACKUP_RETENTION = { daily: 7, manual: 10, "pre-restore": 5 };
 const MIXED_VERSION_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -76,6 +76,7 @@ function loadOrCreateAuthToken() {
     if (!/^[A-Za-z0-9_-]{43}$/.test(existing)) {
       throw new Error("Local API authentication token file is invalid");
     }
+
     try { fs.chmodSync(AUTH_TOKEN_FILE, 0o600); } catch {}
     return existing;
   }
@@ -255,6 +256,134 @@ const migrations = [
       CREATE INDEX idx_conflicts_status
         ON conflicts(status, created_at DESC);
     `
+  },
+  {
+    version: 3,
+    sql: `
+      ALTER TABLE entries ADD COLUMN status TEXT NOT NULL DEFAULT 'raw'
+        CHECK(status IN ('raw', 'draft', 'verified', 'deprecated'));
+      ALTER TABLE entries ADD COLUMN confidence REAL
+        CHECK(confidence IS NULL OR (confidence >= 0 AND confidence <= 1));
+      ALTER TABLE entries ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE entries ADD COLUMN agent_run_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE entries ADD COLUMN approved_by TEXT NOT NULL DEFAULT '';
+      ALTER TABLE entries ADD COLUMN approved_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE entries ADD COLUMN supersedes_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE entries ADD COLUMN relations_json TEXT NOT NULL DEFAULT '[]';
+
+      CREATE TABLE agent_runs (
+        id TEXT PRIMARY KEY,
+        goal TEXT NOT NULL,
+        output_format TEXT NOT NULL,
+        output_mode TEXT NOT NULL,
+        provider TEXT NOT NULL CHECK(provider IN ('browser', 'ollama')),
+        model TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL CHECK(status IN (
+          'planned', 'running', 'completed', 'failed', 'cancelled'
+        )),
+        created_at TEXT NOT NULL,
+        started_at TEXT NOT NULL DEFAULT '',
+        completed_at TEXT NOT NULL DEFAULT '',
+        plan_json TEXT NOT NULL DEFAULT '{}',
+        source_ids_json TEXT NOT NULL DEFAULT '[]',
+        result TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        permission_scope_json TEXT NOT NULL DEFAULT '{}'
+      );
+      CREATE INDEX idx_agent_runs_created_at
+        ON agent_runs(created_at DESC);
+
+      CREATE TABLE knowledge_proposals (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES agent_runs(id),
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        project TEXT NOT NULL DEFAULT '',
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        source_ids_json TEXT NOT NULL DEFAULT '[]',
+        confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+        rationale TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending', 'approved', 'rejected')),
+        created_at TEXT NOT NULL,
+        decided_at TEXT NOT NULL DEFAULT '',
+        approved_entry_id TEXT NOT NULL DEFAULT '',
+        approved_by TEXT NOT NULL DEFAULT '',
+        idempotency_key TEXT NOT NULL DEFAULT '',
+        undone_at TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX idx_knowledge_proposals_run
+        ON knowledge_proposals(run_id, created_at);
+
+      CREATE TABLE audit_log (
+        id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL CHECK(event_type IN (
+          'agent_run', 'proposal', 'approval', 'rejection', 'write', 'undo'
+        )),
+        actor TEXT NOT NULL,
+        run_id TEXT NOT NULL DEFAULT '',
+        proposal_id TEXT NOT NULL DEFAULT '',
+        entry_id TEXT NOT NULL DEFAULT '',
+        details_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_audit_created_at ON audit_log(created_at DESC);
+      CREATE TRIGGER audit_log_no_update
+        BEFORE UPDATE ON audit_log BEGIN
+          SELECT RAISE(ABORT, 'audit_log is immutable');
+        END;
+      CREATE TRIGGER audit_log_no_delete
+        BEFORE DELETE ON audit_log BEGIN
+          SELECT RAISE(ABORT, 'audit_log is immutable');
+        END;
+    `
+  },
+  {
+    version: 4,
+    sql: `
+      ALTER TABLE operations ADD COLUMN payload_version INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE knowledge_proposals
+        ADD COLUMN source_versions_json TEXT NOT NULL DEFAULT '[]';
+    `
+  },
+  {
+    version: 5,
+    sql: `
+      ALTER TABLE agent_runs ADD COLUMN source_pins_json TEXT NOT NULL DEFAULT '[]';
+    `
+  },
+  {
+    version: 6,
+    sql: `
+      ALTER TABLE knowledge_proposals
+        ADD COLUMN approval_entry_ids_json TEXT NOT NULL DEFAULT '[]';
+      UPDATE knowledge_proposals
+        SET approval_entry_ids_json = json_array(approved_entry_id)
+        WHERE approved_entry_id <> '';
+    `
+  },
+  {
+    version: 7,
+    sql: `
+      UPDATE entries
+        SET content_key = 'deprecated:' || id || ':' || content_key
+        WHERE status = 'deprecated' AND content_key NOT LIKE 'deprecated:%';
+    `
+  },
+  {
+    version: 8,
+    sql: `
+      ALTER TABLE entries ADD COLUMN semantic_revision INTEGER NOT NULL DEFAULT 1
+        CHECK(semantic_revision >= 1);
+    `
+  },
+  {
+    version: 9,
+    sql: `
+      ALTER TABLE knowledge_proposals
+        ADD COLUMN canonical_content_hash TEXT NOT NULL DEFAULT '';
+    `
   }
 ];
 
@@ -340,13 +469,18 @@ function prepareStatements() {
     insert: db.prepare(`
       INSERT INTO entries (
         id, title, content, content_key, source, project, tags_json, summary,
-        created_at, updated_at, view_count, last_viewed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        created_at, updated_at, view_count, last_viewed_at, status, confidence,
+        provenance_json, agent_run_id, approved_by, approved_at,
+        supersedes_json, relations_json, semantic_revision
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     update: db.prepare(`
       UPDATE entries
       SET title = ?, content = ?, content_key = ?, source = ?, project = ?,
-          tags_json = ?, summary = ?, updated_at = ?
+          tags_json = ?, summary = ?, updated_at = ?, status = ?, confidence = ?,
+          provenance_json = ?, agent_run_id = ?, approved_by = ?, approved_at = ?,
+          supersedes_json = ?, relations_json = ?,
+          semantic_revision = semantic_revision + 1
       WHERE id = ?
     `),
     remove: db.prepare("DELETE FROM entries WHERE id = ?"),
@@ -358,8 +492,10 @@ function prepareStatements() {
     replaceEntry: db.prepare(`
       INSERT INTO entries (
         id, title, content, content_key, source, project, tags_json, summary,
-        created_at, updated_at, view_count, last_viewed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        created_at, updated_at, view_count, last_viewed_at, status, confidence,
+        provenance_json, agent_run_id, approved_by, approved_at,
+        supersedes_json, relations_json, semantic_revision
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         content = excluded.content,
@@ -371,7 +507,16 @@ function prepareStatements() {
         created_at = excluded.created_at,
         updated_at = excluded.updated_at,
         view_count = excluded.view_count,
-        last_viewed_at = excluded.last_viewed_at
+        last_viewed_at = excluded.last_viewed_at,
+        status = excluded.status,
+        confidence = excluded.confidence,
+        provenance_json = excluded.provenance_json,
+        agent_run_id = excluded.agent_run_id,
+        approved_by = excluded.approved_by,
+        approved_at = excluded.approved_at,
+        supersedes_json = excluded.supersedes_json,
+        relations_json = excluded.relations_json,
+        semantic_revision = excluded.semantic_revision
     `),
     recordView: db.prepare(`
       UPDATE entries
@@ -386,8 +531,8 @@ function prepareStatements() {
     insertOperation: db.prepare(`
       INSERT OR IGNORE INTO operations (
         op_id, device_id, counter, entity_id, kind, vector_json,
-        entry_json, created_at, imported_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        entry_json, created_at, imported_at, payload_version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     findOperation: db.prepare("SELECT * FROM operations WHERE op_id = ?"),
     listOperations: db.prepare(
@@ -436,7 +581,134 @@ function prepareStatements() {
     `),
     conflictCount: db.prepare(
       "SELECT COUNT(*) AS count FROM conflicts WHERE status = 'open'"
-    )
+    ),
+    insertAgentRun: db.prepare(`
+      INSERT INTO agent_runs (
+        id, goal, output_format, output_mode, provider, model, status, created_at,
+        plan_json, source_ids_json, permission_scope_json, source_pins_json
+      ) VALUES (?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?)
+    `),
+    listAgentRuns: db.prepare("SELECT * FROM agent_runs ORDER BY created_at DESC"),
+    findAgentRun: db.prepare("SELECT * FROM agent_runs WHERE id = ?"),
+    updateRunSourcePins: db.prepare(
+      "UPDATE agent_runs SET source_pins_json = ? WHERE id = ?"
+    ),
+    insertImportedAgentRun: db.prepare(`
+      INSERT OR IGNORE INTO agent_runs (
+        id, goal, output_format, output_mode, provider, model, status, created_at,
+        started_at, completed_at, plan_json, source_ids_json, result, error,
+        permission_scope_json, source_pins_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `),
+    updateImportedAgentRun: db.prepare(`
+      UPDATE agent_runs SET status = ?, started_at = ?, completed_at = ?,
+        result = ?, error = ? WHERE id = ?
+    `),
+    startAgentRun: db.prepare(`
+      UPDATE agent_runs SET status = 'running', started_at = ?
+      WHERE id = ? AND status = 'planned'
+    `),
+    completeAgentRun: db.prepare(`
+      UPDATE agent_runs SET status = 'completed', completed_at = ?, result = ?
+      WHERE id = ? AND status = 'running'
+    `),
+    failAgentRun: db.prepare(`
+      UPDATE agent_runs SET status = 'failed', completed_at = ?, error = ?
+      WHERE id = ? AND status = 'running'
+    `),
+    cancelAgentRun: db.prepare(`
+      UPDATE agent_runs SET status = 'cancelled', completed_at = ?
+      WHERE id = ? AND status IN ('planned', 'running')
+    `),
+    insertProposal: db.prepare(`
+      INSERT INTO knowledge_proposals (
+        id, run_id, title, content, summary, project, tags_json, source_ids_json,
+        confidence, rationale, status, created_at, source_versions_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `),
+    listProposals: db.prepare(`
+      SELECT * FROM knowledge_proposals WHERE run_id = ? ORDER BY created_at, id
+    `),
+    findProposal: db.prepare("SELECT * FROM knowledge_proposals WHERE id = ?"),
+    updateProposalSourceVersions: db.prepare(
+      "UPDATE knowledge_proposals SET source_versions_json = ? WHERE id = ?"
+    ),
+    insertImportedProposal: db.prepare(`
+      INSERT OR IGNORE INTO knowledge_proposals (
+        id, run_id, title, content, summary, project, tags_json, source_ids_json,
+        confidence, rationale, status, created_at, decided_at, approved_entry_id,
+        approved_by, idempotency_key, undone_at, source_versions_json,
+        approval_entry_ids_json, canonical_content_hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)
+    `),
+    updateImportedProposal: db.prepare(`
+      UPDATE knowledge_proposals SET status = ?, decided_at = ?,
+        approved_entry_id = ?, approved_by = ?, undone_at = ?,
+        approval_entry_ids_json = ?, canonical_content_hash = ? WHERE id = ?
+    `),
+    approveProposal: db.prepare(`
+      UPDATE knowledge_proposals
+      SET status = 'approved', decided_at = ?, approved_entry_id = ?,
+          approved_by = ?, idempotency_key = ?, approval_entry_ids_json = ?
+      WHERE id = ? AND status = 'pending'
+    `),
+    rejectProposal: db.prepare(`
+      UPDATE knowledge_proposals SET status = 'rejected', decided_at = ?
+      WHERE id = ? AND status = 'pending'
+    `),
+    markProposalUndone: db.prepare(`
+      UPDATE knowledge_proposals SET undone_at = ?
+      WHERE id = ? AND status = 'approved' AND undone_at = ''
+    `),
+    deprecateEntry: db.prepare(`
+      UPDATE entries SET status = 'deprecated', updated_at = ?,
+        semantic_revision = semantic_revision + 1,
+        content_key = CASE
+          WHEN content_key LIKE 'deprecated:%' THEN content_key
+          ELSE 'deprecated:' || id || ':' || content_key
+        END
+      WHERE id = ?
+    `),
+    insertAudit: db.prepare(`
+      INSERT INTO audit_log (
+        id, event_type, actor, run_id, proposal_id, entry_id, details_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `),
+    insertImportedAudit: db.prepare(`
+      INSERT OR IGNORE INTO audit_log (
+        id, event_type, actor, run_id, proposal_id, entry_id, details_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `),
+    findAudit: db.prepare("SELECT * FROM audit_log WHERE id = ?"),
+    listAudit: db.prepare("SELECT * FROM audit_log ORDER BY created_at DESC, id DESC")
+    ,
+    findActiveApprovalReference: db.prepare(`
+      SELECT p.id FROM knowledge_proposals p
+      WHERE p.status = 'approved' AND p.undone_at = '' AND p.id <> ?
+        AND (
+          p.approved_entry_id = ? OR EXISTS (
+            SELECT 1 FROM json_each(p.approval_entry_ids_json)
+            WHERE value = ?
+          )
+        )
+      LIMIT 1
+    `),
+    findAnyActiveApprovalReference: db.prepare(`
+      SELECT p.* FROM knowledge_proposals p
+      WHERE p.status = 'approved' AND p.undone_at = ''
+        AND (
+          p.approved_entry_id = ? OR EXISTS (
+            SELECT 1 FROM json_each(p.approval_entry_ids_json)
+            WHERE value = ?
+          )
+        )
+      ORDER BY p.id LIMIT 1
+    `),
+    findProposalByApprovedEntry: db.prepare(`
+      SELECT * FROM knowledge_proposals
+      WHERE status = 'approved' AND undone_at = '' AND approved_entry_id = ?
+      LIMIT 1
+    `)
   };
 }
 
@@ -485,7 +757,8 @@ const syncState = {
   lastError: "",
   degradedFiles: [],
   timer: null,
-  running: null
+  running: null,
+  suppressedDeletes: []
 };
 const backupState = { running: null, timer: null };
 
@@ -501,6 +774,68 @@ function normalizeTags(tags) {
       return true;
     })
     .slice(0, 20);
+}
+
+function parseJsonObject(value, fallback = {}) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return parsed && !Array.isArray(parsed) && typeof parsed === "object"
+      ? parsed
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeStringArray(value, limit = 50) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map(item => String(item || "").trim())
+    .filter(Boolean))]
+    .slice(0, limit);
+}
+
+function boundedText(value, field, maximum, { required = false } = {}) {
+  const text = String(value ?? "").trim();
+  if (required && !text) throw apiError(400, `${field} 不能为空`);
+  if (text.length > maximum) throw apiError(400, `${field} 超过长度限制`);
+  return text;
+}
+
+function requireObject(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw apiError(400, `${label} 必须是对象`);
+  }
+  return value;
+}
+
+function normalizeLifecycle(input, existing = {}) {
+  const status = input.status ?? existing.status ?? "raw";
+  if (!["raw", "draft", "verified", "deprecated"].includes(status)) {
+    throw apiError(400, "知识状态不正确");
+  }
+  const confidenceValue = input.confidence ?? existing.confidence ?? null;
+  const confidence = confidenceValue === null || confidenceValue === ""
+    ? null
+    : Number(confidenceValue);
+  if (confidence !== null && (!Number.isFinite(confidence) ||
+      confidence < 0 || confidence > 1)) {
+    throw apiError(400, "confidence 必须在 0 到 1 之间");
+  }
+  const provenance = parseJsonObject(input.provenance ?? existing.provenance ?? {}, null);
+  if (!provenance || JSON.stringify(provenance).length > 12000) {
+    throw apiError(400, "provenance 必须是有效且有界的对象");
+  }
+  return {
+    status,
+    confidence,
+    provenance,
+    agentRunId: boundedText(input.agentRunId ?? existing.agentRunId, "agentRunId", 100),
+    approvedBy: boundedText(input.approvedBy ?? existing.approvedBy, "approvedBy", 200),
+    approvedAt: boundedText(input.approvedAt ?? existing.approvedAt, "approvedAt", 80),
+    supersedes: normalizeStringArray(input.supersedes ?? existing.supersedes, 50),
+    relations: normalizeStringArray(input.relations ?? existing.relations, 100)
+  };
 }
 
 function suggestTags(content, title, source) {
@@ -532,6 +867,11 @@ function contentKey(content) {
   return crypto.createHash("sha256").update(comparable).digest("hex");
 }
 
+function storedContentKey(id, content, status) {
+  const key = contentKey(content);
+  return status === "deprecated" ? `deprecated:${id}:${key}` : key;
+}
+
 function deriveTitle(content) {
   const firstLine = String(content || "").split(/\r?\n/).find(line => line.trim());
   return (firstLine || "未命名知识").trim().slice(0, 60);
@@ -549,24 +889,50 @@ function rowToEntry(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     viewCount: row.view_count,
-    lastViewedAt: row.last_viewed_at
+    lastViewedAt: row.last_viewed_at,
+    status: row.status || "raw",
+    confidence: row.confidence === null || row.confidence === undefined
+      ? null
+      : Number(row.confidence),
+    provenance: parseJsonObject(row.provenance_json, {}),
+    agentRunId: row.agent_run_id || "",
+    approvedBy: row.approved_by || "",
+    approvedAt: row.approved_at || "",
+    supersedes: normalizeStringArray(safeJson(row.supersedes_json || "[]", []), 50),
+    relations: normalizeStringArray(safeJson(row.relations_json || "[]", []), 100),
+    semanticRevision: Number.isSafeInteger(row.semantic_revision)
+      ? row.semantic_revision
+      : 1
   };
 }
 
-function normalizeInput(input, existing = {}) {
-  const content = String(input.content ?? existing.content ?? "").trim();
+function normalizeInput(input, existing = {}, lifecycleMode = "preserve") {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw apiError(400, "知识内容必须是对象");
+  }
+  const content = boundedText(input.content ?? existing.content, "content", 200000, {
+    required: true
+  });
   if (!content) throw apiError(400, "内容不能为空");
-  const source = String(input.source ?? existing.source ?? "").trim();
-  const title = String(input.title ?? existing.title ?? "").trim() || deriveTitle(content);
+  const source = boundedText(input.source ?? existing.source, "source", 2000);
+  const title = boundedText(input.title ?? existing.title, "title", 300) || deriveTitle(content);
   const suppliedTags = input.tags ?? existing.tags ?? [];
   const tags = normalizeTags(suppliedTags);
+  const lifecycle = lifecycleMode === "trusted"
+    ? normalizeLifecycle(input, existing)
+    : lifecycleMode === "raw"
+      ? normalizeLifecycle({}, {})
+      : normalizeLifecycle({}, existing);
   return {
     title,
     content,
     source,
-    project: String(input.project ?? existing.project ?? "").trim(),
-    tags: tags.length ? tags : suggestTags(content, title, source),
-    summary: String(input.summary ?? existing.summary ?? "").trim()
+    project: boundedText(input.project ?? existing.project, "project", 200),
+    tags: tags.length || lifecycleMode === "trusted"
+      ? tags
+      : suggestTags(content, title, source),
+    summary: boundedText(input.summary ?? existing.summary, "summary", 4000),
+    ...lifecycle
   };
 }
 
@@ -576,9 +942,87 @@ function apiError(status, message) {
   return error;
 }
 
-function replaceEntryRaw(entry) {
-  const normalized = normalizeInput(entry, entry);
-  const duplicate = statements.findByContent.get(contentKey(normalized.content));
+function activeApprovalForEntry(entryId) {
+  return statements.findAnyActiveApprovalReference.get(entryId, entryId) || null;
+}
+
+const PROTECTED_ENTRY_FIELDS = new Set([
+  "status", "confidence", "provenance", "agentRunId", "approvedBy",
+  "approvedAt", "supersedes", "relations"
+]);
+
+function rejectProtectedEntryFields(input) {
+  requireObject(input, "知识内容");
+  const protectedFields = Object.keys(input).filter(key => PROTECTED_ENTRY_FIELDS.has(key));
+  if (protectedFields.length) {
+    throw apiError(403, `通用知识接口不能修改受保护字段：${protectedFields.join(", ")}`);
+  }
+}
+
+function replaceEntryRaw(entry, preserveMissingLifecycle = false) {
+  const existingRow = statements.find.get(entry.id);
+  const existing = existingRow ? rowToEntry(existingRow) : {};
+  let normalized = normalizeInput(
+    entry,
+    preserveMissingLifecycle ? existing : entry,
+    "trusted"
+  );
+  if (existing.status === "deprecated" && normalized.status !== "deprecated") {
+    normalized = {
+      ...normalized,
+      status: "deprecated",
+      confidence: existing.confidence,
+      provenance: existing.provenance,
+      agentRunId: existing.agentRunId,
+      approvedBy: existing.approvedBy,
+      approvedAt: existing.approvedAt,
+      supersedes: existing.supersedes,
+      relations: existing.relations
+    };
+  }
+  const approvedAgentEntry = existing.agentRunId &&
+    existing.provenance?.origin === "agent" && existing.approvedAt;
+  const incomingSubstantiveChange = approvedAgentEntry && (
+    ["title", "content", "summary", "source", "project"]
+      .some(field => normalized[field] !== existing[field]) ||
+    canonicalJson(normalized.tags) !== canonicalJson(existing.tags)
+  );
+  if (incomingSubstantiveChange) {
+    normalized = {
+      ...normalized,
+      title: existing.title,
+      content: existing.content,
+      summary: existing.summary,
+      source: existing.source,
+      project: existing.project,
+      tags: existing.tags,
+      status: existing.status,
+      confidence: existing.confidence,
+      provenance: existing.provenance,
+      agentRunId: existing.agentRunId,
+      approvedBy: existing.approvedBy,
+      approvedAt: existing.approvedAt,
+      supersedes: existing.supersedes,
+      relations: existing.relations
+    };
+  }
+  if (existingRow && activeApprovalForEntry(entry.id) &&
+      normalized.status !== "deprecated") {
+    normalized = {
+      ...normalized,
+      status: existing.status,
+      confidence: existing.confidence,
+      provenance: existing.provenance,
+      agentRunId: existing.agentRunId,
+      approvedBy: existing.approvedBy,
+      approvedAt: existing.approvedAt,
+      supersedes: existing.supersedes,
+      relations: existing.relations
+    };
+  }
+  const duplicate = normalized.status === "deprecated"
+    ? null
+    : statements.findByContent.get(contentKey(normalized.content));
   if (duplicate && duplicate.id !== entry.id) {
     throw new Error(`同步内容与已有知识重复：${duplicate.title}`);
   }
@@ -586,7 +1030,7 @@ function replaceEntryRaw(entry) {
     entry.id,
     normalized.title,
     normalized.content,
-    contentKey(normalized.content),
+    storedContentKey(entry.id, normalized.content, normalized.status),
     normalized.source,
     normalized.project,
     JSON.stringify(normalized.tags),
@@ -594,13 +1038,26 @@ function replaceEntryRaw(entry) {
     entry.createdAt || new Date().toISOString(),
     entry.updatedAt || "",
     Number.isInteger(entry.viewCount) ? entry.viewCount : 0,
-    entry.lastViewedAt || ""
+    entry.lastViewedAt || "",
+    normalized.status,
+    normalized.confidence,
+    JSON.stringify(normalized.provenance),
+    normalized.agentRunId,
+    normalized.approvedBy,
+    normalized.approvedAt,
+    JSON.stringify(normalized.supersedes),
+    JSON.stringify(normalized.relations),
+    Math.max(
+      Number.isSafeInteger(existing.semanticRevision) ? existing.semanticRevision : 1,
+      Number.isSafeInteger(entry.semanticRevision) ? entry.semanticRevision : 1
+    )
   );
   statements.removeTombstone.run(entry.id);
 }
 
 function findDuplicateEntry(entry) {
   if (!entry) return null;
+  if (entry.status === "deprecated") return null;
   const duplicate = statements.findByContent.get(contentKey(entry.content));
   return duplicate && duplicate.id !== entry.id ? duplicate : null;
 }
@@ -679,6 +1136,7 @@ function compareVectors(left, right) {
 
 function operationFromRow(row) {
   return {
+    payloadVersion: Number(row.payload_version || 1),
     opId: row.op_id,
     deviceId: row.device_id,
     counter: row.counter,
@@ -700,6 +1158,10 @@ function validateOperation(raw) {
       typeof raw.createdAt !== "string") {
     throw new Error("OneDrive 操作记录格式不正确");
   }
+  const payloadVersion = raw.payloadVersion === undefined ? 1 : Number(raw.payloadVersion);
+  if (![1, 2].includes(payloadVersion)) {
+    throw new Error(`操作 ${raw.opId} 的 payloadVersion 不受支持`);
+  }
   const vector = parseVector(raw.vector);
   if (vector[raw.deviceId] !== raw.counter) {
     throw new Error(`操作 ${raw.opId} 的逻辑计数与版本向量不一致`);
@@ -709,20 +1171,38 @@ function validateOperation(raw) {
     throw new Error(`操作 ${raw.opId} 缺少有效知识内容`);
   }
   return {
+    payloadVersion,
     opId: raw.opId,
     deviceId: raw.deviceId,
     counter: raw.counter,
     entityId: raw.entityId,
     kind: raw.kind,
     vector,
-    entry: raw.kind === "upsert" ? {
-      ...raw.entry,
-      tags: normalizeTags(raw.entry.tags),
-      summary: String(raw.entry.summary || ""),
-      updatedAt: String(raw.entry.updatedAt || ""),
-      viewCount: Number.isInteger(raw.entry.viewCount) ? raw.entry.viewCount : 0,
-      lastViewedAt: String(raw.entry.lastViewedAt || "")
-    } : null,
+    entry: raw.kind === "upsert" ? (() => {
+      const lifecycleFields = [
+        "status", "confidence", "provenance", "agentRunId", "approvedBy",
+        "approvedAt", "supersedes", "relations"
+      ];
+      const hasCompleteLifecycle = lifecycleFields.every(field =>
+        Object.hasOwn(raw.entry, field)
+      );
+      if (payloadVersion === 2 && !hasCompleteLifecycle) {
+        throw new Error(`操作 ${raw.opId} 缺少 v2 生命周期字段`);
+      }
+      const normalized = {
+        ...raw.entry,
+        tags: normalizeTags(raw.entry.tags),
+        summary: String(raw.entry.summary || "").slice(0, 4000),
+        updatedAt: String(raw.entry.updatedAt || ""),
+        viewCount: Number.isInteger(raw.entry.viewCount) ? raw.entry.viewCount : 0,
+        lastViewedAt: String(raw.entry.lastViewedAt || "")
+      };
+      const lifecycle = normalizeLifecycle(raw.entry, {});
+      for (const field of lifecycleFields) {
+        if (Object.hasOwn(raw.entry, field)) normalized[field] = lifecycle[field];
+      }
+      return normalized;
+    })() : null,
     createdAt: raw.createdAt
   };
 }
@@ -737,7 +1217,8 @@ function persistOperation(operation) {
     JSON.stringify(operation.vector),
     operation.entry ? JSON.stringify(operation.entry) : null,
     operation.createdAt,
-    new Date().toISOString()
+    new Date().toISOString(),
+    operation.payloadVersion || 1
   );
   if (!result.changes && !statements.findOperation.get(operation.opId)) {
     throw new Error(`无法保存操作 ${operation.opId}`);
@@ -774,6 +1255,7 @@ function nextLocalOperation(
   vector[DEVICE_ID] = counter;
   statements.setMetadata.run("logical_counter", String(counter));
   return {
+    payloadVersion: 2,
     opId: `${DEVICE_ID}:${counter}`,
     deviceId: DEVICE_ID,
     counter,
@@ -790,7 +1272,7 @@ function applyOperationPayload(operation) {
     statements.remove.run(operation.entityId);
     statements.upsertTombstone.run(operation.entityId, operation.createdAt);
   } else {
-    replaceEntryRaw(operation.entry);
+    replaceEntryRaw(operation.entry, operation.payloadVersion < 2);
   }
   setEntityVersion(operation);
 }
@@ -825,6 +1307,47 @@ function recordDuplicateConflict(operation, duplicate, currentOperation = null) 
 }
 
 function applyOperationOrRecordDuplicate(operation, currentOperation = null) {
+  if (operation.kind === "delete" && activeApprovalForEntry(operation.entityId)) {
+    const row = statements.find.get(operation.entityId);
+    if (!row) throw new Error("有效审批知识缺失，无法抑制删除");
+    const preserved = rowToEntry(row);
+    const correction = nextLocalOperation(
+      "upsert",
+      operation.entityId,
+      preserved,
+      mergeVectors(operation.vector, currentOperation?.vector || {})
+    );
+    persistOperation(correction);
+    applyOperationPayload(correction);
+    advanceObservedFrontier(correction);
+    statements.insertConflict.run(
+      conflictId(currentOperation || correction, operation),
+      operation.entityId,
+      JSON.stringify(currentOperation || correction),
+      JSON.stringify(operation),
+      correction.opId,
+      new Date().toISOString()
+    );
+    const auditId = crypto.createHash("sha256")
+      .update(`suppress-approved-delete\n${operation.opId}\n${correction.opId}`)
+      .digest("hex");
+    statements.insertImportedAudit.run(
+      auditId, "write", "sync", preserved.agentRunId,
+      preserved.provenance?.proposalId || "", preserved.id,
+      JSON.stringify({
+        action: "suppress-active-approval-delete",
+        rejectedOperationId: operation.opId,
+        correctionOperationId: correction.opId
+      }),
+      correction.createdAt
+    );
+    syncState.suppressedDeletes.push({
+      entityId: operation.entityId,
+      operationId: operation.opId,
+      correctionOperationId: correction.opId
+    });
+    return false;
+  }
   const duplicate = operation.kind === "upsert"
     ? findDuplicateEntry(operation.entry)
     : null;
@@ -832,7 +1355,27 @@ function applyOperationOrRecordDuplicate(operation, currentOperation = null) {
     recordDuplicateConflict(operation, duplicate, currentOperation);
     return false;
   }
+  const priorEntry = statements.find.get(operation.entityId);
+  const preserveDeprecation = operation.kind === "upsert" &&
+    priorEntry?.status === "deprecated" &&
+    operation.entry.status !== "deprecated";
+  const preserveApproval = operation.kind === "upsert" &&
+    operation.entry.status !== "deprecated" &&
+    Boolean(activeApprovalForEntry(operation.entityId));
   applyOperationPayload(operation);
+  if (preserveDeprecation || preserveApproval) {
+    const deprecated = rowToEntry(statements.find.get(operation.entityId));
+    const correction = nextLocalOperation(
+      "upsert",
+      operation.entityId,
+      deprecated,
+      mergeVectors(operation.vector, currentOperation?.vector || {})
+    );
+    persistOperation(correction);
+    applyOperationPayload(correction);
+    resolveCoveredConflicts(correction);
+    advanceObservedFrontier(correction);
+  }
   resolveCoveredConflicts(operation);
   return true;
 }
@@ -1001,21 +1544,28 @@ function bootstrapExistingData() {
 }
 
 bootstrapExistingData();
+backfillRunSourcePins();
 
-function createEntry(input, preserve = {}) {
-  const normalized = normalizeInput(input);
+function createEntry(input, preserve = {}, options = {}) {
+  const normalized = normalizeInput(
+    input,
+    options.trustedLifecycle ? preserve : {},
+    options.trustedLifecycle ? "trusted" : "raw"
+  );
   const key = contentKey(normalized.content);
-  const duplicate = statements.findByContent.get(key);
+  const duplicate = normalized.status === "deprecated"
+    ? null
+    : statements.findByContent.get(key);
   if (duplicate) throw apiError(409, `这段内容已经保存过：${duplicate.title}`);
 
-  return runTransaction(() => {
+  const action = () => {
     const createdAt = preserve.createdAt || new Date().toISOString();
     const id = preserve.id || crypto.randomUUID();
     statements.insert.run(
       id,
       normalized.title,
       normalized.content,
-      key,
+      storedContentKey(id, normalized.content, normalized.status),
       normalized.source,
       normalized.project,
       JSON.stringify(normalized.tags),
@@ -1023,23 +1573,45 @@ function createEntry(input, preserve = {}) {
       createdAt,
       preserve.updatedAt || "",
       Number.isInteger(preserve.viewCount) ? preserve.viewCount : 0,
-      preserve.lastViewedAt || ""
+      preserve.lastViewedAt || "",
+      normalized.status,
+      normalized.confidence,
+      JSON.stringify(normalized.provenance),
+      normalized.agentRunId,
+      normalized.approvedBy,
+      normalized.approvedAt,
+      JSON.stringify(normalized.supersedes),
+      JSON.stringify(normalized.relations),
+      Number.isSafeInteger(preserve.semanticRevision) ? preserve.semanticRevision : 1
     );
     statements.removeTombstone.run(id);
     const entry = rowToEntry(statements.find.get(id));
     appendLocalState("upsert", id, entry);
     scheduleSync();
     return entry;
-  });
+  };
+  return options.inTransaction ? action() : runTransaction(action);
 }
 
 function updateEntry(id, input) {
   const currentRow = statements.find.get(id);
   if (!currentRow) throw apiError(404, "知识不存在");
   const current = rowToEntry(currentRow);
-  const normalized = normalizeInput(input, current);
+  const normalized = normalizeInput(input, current, "preserve");
+  const substantiveChanged = [
+    "title", "content", "summary", "source", "project"
+  ].some(field => normalized[field] !== current[field]) ||
+    canonicalJson(normalized.tags) !== canonicalJson(current.tags);
+  if (substantiveChanged && activeApprovalForEntry(id)) {
+    throw apiError(
+      409,
+      "Agent 审批知识不能通过通用编辑修改；请创建新的候选知识并审批"
+    );
+  }
   const key = contentKey(normalized.content);
-  const duplicate = statements.findByContent.get(key);
+  const duplicate = normalized.status === "deprecated"
+    ? null
+    : statements.findByContent.get(key);
   if (duplicate && duplicate.id !== id) {
     throw apiError(409, `这段内容已经保存过：${duplicate.title}`);
   }
@@ -1048,12 +1620,20 @@ function updateEntry(id, input) {
     statements.update.run(
       normalized.title,
       normalized.content,
-      key,
+      storedContentKey(id, normalized.content, normalized.status),
       normalized.source,
       normalized.project,
       JSON.stringify(normalized.tags),
       normalized.summary,
       new Date().toISOString(),
+      normalized.status,
+      normalized.confidence,
+      JSON.stringify(normalized.provenance),
+      normalized.agentRunId,
+      normalized.approvedBy,
+      normalized.approvedAt,
+      JSON.stringify(normalized.supersedes),
+      JSON.stringify(normalized.relations),
       id
     );
     const entry = rowToEntry(statements.find.get(id));
@@ -1065,7 +1645,15 @@ function updateEntry(id, input) {
 
 function deleteEntry(id) {
   return runTransaction(() => {
-    if (!statements.find.get(id)) throw apiError(404, "知识不存在");
+    const row = statements.find.get(id);
+    if (!row) throw apiError(404, "知识不存在");
+    const entry = rowToEntry(row);
+    if (activeApprovalForEntry(id)) {
+      throw apiError(
+        409,
+        "Agent 审批知识不能直接删除；请通过对应候选知识执行撤销审批"
+      );
+    }
     appendLocalState("delete", id, null);
     scheduleSync();
   });
@@ -1080,6 +1668,1494 @@ function recordView(id) {
     scheduleSync();
     return entry;
   });
+}
+
+function safeJson(value, fallback) {
+  if (value && typeof value === "object") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function stripSensitiveKeys(value) {
+  if (Array.isArray(value)) return value.map(stripSensitiveKeys);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !/(?:token|secret|password|credential|api[_-]?key)/i.test(key))
+    .map(([key, item]) => [key, stripSensitiveKeys(item)]));
+}
+
+function portablePermissionScope(value) {
+  const scope = safeJson(value, {});
+  return {
+    mode: "propose-only",
+    project: String(scope.project || "").slice(0, 200),
+    startAt: String(scope.startAt || "").slice(0, 80),
+    endAt: String(scope.endAt || "").slice(0, 80),
+    externalSupplementation: false
+  };
+}
+
+function rowToAgentRun(row) {
+  return {
+    id: row.id,
+    goal: row.goal,
+    outputFormat: row.output_format,
+    outputMode: row.output_mode,
+    provider: row.provider,
+    model: row.model,
+    status: row.status,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    plan: stripSensitiveKeys(safeJson(row.plan_json, {})),
+    sourceIds: normalizeStringArray(safeJson(row.source_ids_json, []), 20),
+    sourcePins: safeJson(row.source_pins_json, []),
+    result: row.result,
+    error: row.error,
+    permissionScope: portablePermissionScope(row.permission_scope_json)
+  };
+}
+
+function rowToProposal(row) {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    title: row.title,
+    content: row.content,
+    summary: row.summary,
+    project: row.project,
+    tags: normalizeTags(safeJson(row.tags_json, [])),
+    sourceIds: normalizeStringArray(safeJson(row.source_ids_json, []), 20),
+    sourceVersions: safeJson(row.source_versions_json, []),
+    confidence: Number(row.confidence),
+    rationale: row.rationale,
+    status: row.status,
+    createdAt: row.created_at,
+    decidedAt: row.decided_at,
+    approvedEntryId: row.approved_entry_id,
+    approvalEntryIds: normalizeStringArray(
+      safeJson(row.approval_entry_ids_json, []),
+      20
+    ),
+    canonicalContentHash: row.canonical_content_hash ||
+      (row.status === "approved" && row.approved_entry_id &&
+       row.approved_entry_id !== proposalEntryId(row.id)
+        ? contentKey(row.content)
+        : ""),
+    approvedBy: row.approved_by,
+    undoneAt: row.undone_at
+  };
+}
+
+function rowToAudit(row) {
+  return {
+    id: row.id,
+    eventType: row.event_type,
+    actor: row.actor,
+    runId: row.run_id,
+    proposalId: row.proposal_id,
+    entryId: row.entry_id,
+    details: safeJson(row.details_json, {}),
+    createdAt: row.created_at
+  };
+}
+
+function exportAgentLedger() {
+  return {
+    version: 3,
+    runs: statements.listAgentRuns.all().map(rowToAgentRun),
+    proposals: statements.listAgentRuns.all().flatMap(run =>
+      statements.listProposals.all(run.id).map(rowToProposal)
+    ),
+    audit: statements.listAudit.all().map(rowToAudit)
+  };
+}
+
+function validateLedgerRun(raw) {
+  requireObject(raw, "ledger run");
+  const statuses = ["planned", "running", "completed", "failed", "cancelled"];
+  if (!statuses.includes(raw.status) || !["browser", "ollama"].includes(raw.provider)) {
+    throw apiError(400, "ledger run 状态或 provider 不正确");
+  }
+  const permissionScope = requireObject(raw.permissionScope, "ledger permissionScope");
+  if (permissionScope.mode !== "propose-only" ||
+      permissionScope.externalSupplementation !== false) {
+    throw apiError(400, "ledger permissionScope 不安全");
+  }
+  const sourceIds = validateRequiredSourceIds(raw.sourceIds, "run sourceIds");
+  const sourcePins = Array.isArray(raw.sourcePins)
+    ? raw.sourcePins.map(validateSourcePin)
+    : [];
+  if ((sourcePins.length !== 0 && sourcePins.length !== sourceIds.length) ||
+      sourcePins.some(pin => !sourceIds.includes(pin.id))) {
+    throw apiError(400, "ledger run 来源固定信息不完整");
+  }
+  const normalizedScope = portablePermissionScope(permissionScope);
+  sourcePins.forEach(pin => validatePinScope(pin, normalizedScope));
+  return {
+    id: boundedText(raw.id, "run id", 100, { required: true }),
+    goal: boundedText(raw.goal, "goal", 1200, { required: true }),
+    outputFormat: boundedText(raw.outputFormat, "outputFormat", 80, { required: true }),
+    outputMode: raw.outputMode === "propose-only" ? raw.outputMode :
+      (() => { throw apiError(400, "ledger outputMode 不正确"); })(),
+    provider: raw.provider,
+    model: boundedText(raw.model, "model", 100),
+    status: raw.status,
+    createdAt: boundedText(raw.createdAt, "createdAt", 80, { required: true }),
+    startedAt: boundedText(raw.startedAt, "startedAt", 80),
+    completedAt: boundedText(raw.completedAt, "completedAt", 80),
+    plan: stripSensitiveKeys(requireObject(raw.plan, "ledger plan")),
+    sourceIds,
+    sourcePins,
+    result: boundedText(raw.result, "result", 200000),
+    error: boundedText(raw.error, "error", 4000),
+    permissionScope: normalizedScope
+  };
+}
+
+function validateSourcePin(pin) {
+  requireObject(pin, "source version pin");
+  const lifecycle = String(pin.lifecycle || "");
+  if (!["raw", "draft", "verified", "deprecated"].includes(lifecycle)) {
+    throw apiError(400, "source lifecycle 不正确");
+  }
+  const sourceAt = boundedText(pin.sourceAt, "pin sourceAt", 80, { required: true });
+  if (!Number.isFinite(validatedTimestamp(sourceAt))) {
+    throw apiError(400, "pin sourceAt 必须是 ISO 8601 时间");
+  }
+  const content = boundedText(pin.content, "pin content", 200000, { required: true });
+  const contentHash = /^[a-f0-9]{64}$/.test(String(pin.contentHash || ""))
+    ? pin.contentHash
+    : (() => { throw apiError(400, "source contentHash 不正确"); })();
+  if (crypto.createHash("sha256").update(content).digest("hex") !== contentHash) {
+    throw apiError(400, "source pin 内容哈希不匹配");
+  }
+  const normalized = {
+    id: boundedText(pin.id, "pin id", 100, { required: true }),
+    opId: boundedText(pin.opId, "pin opId", 300, { required: true }),
+    contentHash,
+    semanticRevision: Number(pin.semanticRevision),
+    semanticHash: /^[a-f0-9]{64}$/.test(String(pin.semanticHash || ""))
+      ? pin.semanticHash
+      : (() => { throw apiError(400, "source semanticHash 不正确"); })(),
+    lifecycle,
+    title: boundedText(pin.title, "pin title", 300, { required: true }),
+    content,
+    summary: boundedText(pin.summary, "pin summary", 4000),
+    source: boundedText(pin.source, "pin source", 2000),
+    project: boundedText(pin.project, "pin project", 200),
+    tags: validateLedgerStringArray(pin.tags, "pin tags", 20),
+    createdAt: boundedText(pin.createdAt, "pin createdAt", 80, { required: true }),
+    updatedAt: boundedText(pin.updatedAt, "pin updatedAt", 80),
+    sourceAt
+  };
+  if (!Number.isSafeInteger(normalized.semanticRevision) ||
+      normalized.semanticRevision < 1 ||
+      semanticEntryHash({
+        title: normalized.title,
+        content: normalized.content,
+        summary: normalized.summary,
+        source: normalized.source,
+        project: normalized.project,
+        tags: normalized.tags,
+        status: normalized.lifecycle
+      }) !== normalized.semanticHash) {
+    throw apiError(400, "source semantic revision/hash 不正确");
+  }
+  return normalized;
+}
+
+function validatePinScope(pin, scope) {
+  if (scope.project && pin.project !== scope.project) {
+    throw apiError(400, `source pin 超出项目权限范围：${pin.id}`);
+  }
+  if (scope.startAt && Date.parse(pin.sourceAt) < Date.parse(scope.startAt)) {
+    throw apiError(400, `source pin 早于时间权限范围：${pin.id}`);
+  }
+  if (scope.endAt && Date.parse(pin.sourceAt) > Date.parse(scope.endAt)) {
+    throw apiError(400, `source pin 晚于时间权限范围：${pin.id}`);
+  }
+}
+
+function validateLedgerProposal(raw, runMap, ledgerVersion) {
+  requireObject(raw, "ledger proposal");
+  const associatedRun = runMap.get(raw.runId);
+  if (!associatedRun) throw apiError(400, "ledger proposal 缺少关联 run");
+  if (!["pending", "approved", "rejected"].includes(raw.status) ||
+      typeof raw.confidence !== "number" || raw.confidence < 0 || raw.confidence > 1) {
+    throw apiError(400, "ledger proposal 状态或 confidence 不正确");
+  }
+  const sourceIds = validateRequiredSourceIds(raw.sourceIds, "proposal sourceIds");
+  if (sourceIds.some(id => !associatedRun.sourceIds.includes(id))) {
+    throw apiError(400, "ledger proposal 来源超出关联 run");
+  }
+  const sourceVersions = Array.isArray(raw.sourceVersions)
+    ? raw.sourceVersions.map(validateSourcePin)
+    : [];
+  const expectedPins = sourceIds.map(id =>
+    associatedRun.sourcePins.find(pin => pin.id === id)
+  );
+  if (sourceVersions.length !== sourceIds.length ||
+      canonicalJson(sourceVersions) !== canonicalJson(expectedPins)) {
+    throw apiError(400, "ledger proposal 来源版本不完整");
+  }
+  const project = boundedText(raw.project, "project", 200);
+  if (associatedRun.permissionScope.project &&
+      project !== associatedRun.permissionScope.project) {
+    throw apiError(400, "ledger proposal 超出关联 run 项目权限");
+  }
+  const approvedEntryId = boundedText(
+    raw.approvedEntryId,
+    "approvedEntryId",
+    100
+  );
+  const approvalEntryIds = raw.approvalEntryIds === undefined
+    ? (approvedEntryId ? [approvedEntryId] : [])
+    : validateLedgerStringArray(
+        raw.approvalEntryIds,
+        "proposal approvalEntryIds",
+        20
+      );
+  let canonicalContentHash = String(raw.canonicalContentHash || "");
+  if (raw.status === "approved" &&
+      (!approvedEntryId || !approvalEntryIds.includes(approvedEntryId))) {
+    throw apiError(400, "approved proposal 缺少审批知识关联");
+  }
+  if (raw.status === "approved" &&
+      approvedEntryId !== proposalEntryId(raw.id)) {
+    if (ledgerVersion < 3) {
+      throw apiError(400, "approved proposal 必须使用确定性 canonical entry ID");
+    }
+    canonicalContentHash = canonicalContentHash ||
+      contentKey(String(raw.content || ""));
+  }
+  return {
+    id: boundedText(raw.id, "proposal id", 100, { required: true }),
+    runId: raw.runId,
+    title: boundedText(raw.title, "title", 300, { required: true }),
+    content: boundedText(raw.content, "content", 200000, { required: true }),
+    summary: boundedText(raw.summary, "summary", 4000),
+    project,
+    tags: validateLedgerStringArray(raw.tags, "proposal tags", 20),
+    sourceIds,
+    sourceVersions,
+    confidence: raw.confidence,
+    rationale: boundedText(raw.rationale, "rationale", 4000, { required: true }),
+    status: raw.status,
+    createdAt: boundedText(raw.createdAt, "createdAt", 80, { required: true }),
+    decidedAt: boundedText(raw.decidedAt, "decidedAt", 80),
+    approvedEntryId,
+    approvalEntryIds,
+    canonicalContentHash,
+    approvedBy: boundedText(raw.approvedBy, "approvedBy", 200),
+    undoneAt: boundedText(raw.undoneAt, "undoneAt", 80)
+  };
+}
+
+function validateLedgerStringArray(value, label, maximum) {
+  if (!Array.isArray(value) || value.length > maximum ||
+      value.some(item => typeof item !== "string" || !item.trim() || item.length > 200)) {
+    throw apiError(400, `${label} 格式不正确`);
+  }
+  return [...new Set(value.map(item => item.trim()))];
+}
+
+function validateLedgerAudit(raw, runIds, proposalIds) {
+  requireObject(raw, "ledger audit");
+  if (!["agent_run", "proposal", "approval", "rejection", "write", "undo"]
+    .includes(raw.eventType)) {
+    throw apiError(400, "ledger audit eventType 不正确");
+  }
+  if (raw.runId && !runIds.has(raw.runId)) throw apiError(400, "audit 缺少关联 run");
+  if (raw.proposalId && !proposalIds.has(raw.proposalId)) {
+    throw apiError(400, "audit 缺少关联 proposal");
+  }
+  return {
+    id: boundedText(raw.id, "audit id", 100, { required: true }),
+    eventType: raw.eventType,
+    actor: boundedText(raw.actor, "actor", 200, { required: true }),
+    runId: boundedText(raw.runId, "runId", 100),
+    proposalId: boundedText(raw.proposalId, "proposalId", 100),
+    entryId: boundedText(raw.entryId, "entryId", 100),
+    details: requireObject(raw.details, "audit details"),
+    createdAt: boundedText(raw.createdAt, "createdAt", 80, { required: true })
+  };
+}
+
+function normalizeAgentLedger(raw) {
+  requireObject(raw, "agentLedger");
+  if (![1, 2, 3].includes(raw.version) || !Array.isArray(raw.runs) ||
+      !Array.isArray(raw.proposals) || !Array.isArray(raw.audit) ||
+      raw.runs.length > 5000 || raw.proposals.length > 20000 ||
+      raw.audit.length > 100000) {
+    throw apiError(400, "agentLedger 版本或大小不正确");
+  }
+
+  const runs = raw.runs.map(validateLedgerRun);
+  const runIds = new Set(runs.map(run => run.id));
+  if (runIds.size !== runs.length) throw apiError(400, "agentLedger run ID 重复");
+  const runMap = new Map(runs.map(run => [run.id, run]));
+  const proposals = raw.proposals.map(item =>
+    validateLedgerProposal(item, runMap, raw.version)
+  );
+  const proposalIds = new Set(proposals.map(proposal => proposal.id));
+  if (proposalIds.size !== proposals.length) throw apiError(400, "agentLedger proposal ID 重复");
+  const audit = raw.audit.map(item => validateLedgerAudit(item, runIds, proposalIds));
+  return { version: raw.version, runs, proposals, audit };
+}
+
+function validateImportedEntryAssertions(entries, ledger) {
+  const managed = entries.filter(item =>
+    item && (
+      item.status && item.status !== "raw" ||
+      item.confidence !== null && item.confidence !== undefined ||
+      item.agentRunId || item.approvedBy || item.approvedAt ||
+      item.provenance && Object.keys(item.provenance).length
+    )
+  );
+  if (!managed.length) return;
+  if (!ledger) {
+    throw apiError(400, "包含 Agent 生命周期的知识必须携带完整 agentLedger");
+  }
+  const proposals = new Map(ledger.proposals.map(item => [item.id, item]));
+  for (const item of managed) {
+    const proposalId = item.provenance?.proposalId;
+    const proposal = proposals.get(proposalId);
+    const canonicalizedLegacy = item.status === "deprecated" &&
+      ledger.audit.some(event =>
+        event.details?.action === "canonicalize-duplicate-approved-content" &&
+        event.details?.originalTarget === item.id
+      );
+    const supersededDeterministicTarget = proposal &&
+      item.id === proposalEntryId(proposal.id) &&
+      proposal.approvedEntryId !== item.id;
+    const historicalDeprecatedTarget = proposal?.status === "approved" &&
+      item.status === "deprecated";
+    if (canonicalizedLegacy || supersededDeterministicTarget ||
+        historicalDeprecatedTarget) continue;
+    if (!proposal || proposal.status !== "approved" ||
+        !proposal.approvalEntryIds.includes(item.id) ||
+        proposal.approvedEntryId !== item.id ||
+        item.provenance?.origin !== "agent" ||
+        item.provenance?.runId !== proposal.runId ||
+        item.agentRunId !== proposal.runId ||
+        item.title !== proposal.title ||
+        item.content !== proposal.content ||
+        String(item.summary || "") !== proposal.summary ||
+        String(item.project || "") !== proposal.project ||
+        canonicalJson(normalizeTags(item.tags)) !== canonicalJson(proposal.tags) ||
+        String(item.source || "") !== `agent://${proposal.runId}` ||
+        Number(item.confidence) !== proposal.confidence) {
+      throw apiError(400, `Agent 知识 ${item.id || ""} 与 ledger 审批不匹配`);
+    }
+    const events = ledger.audit.filter(event =>
+      event.proposalId === proposal.id
+    );
+    const sharedCanonicalEntry = item.id === contentCanonicalEntryId(item.content) &&
+      proposal.canonicalContentHash === contentKey(item.content);
+    if (!events.some(event => event.eventType === "approval") ||
+        (!sharedCanonicalEntry && !(events.some(event => event.eventType === "write" &&
+            event.entryId === item.id) ||
+          ledger.audit.some(event => event.eventType === "write" &&
+            event.details?.canonicalTarget === item.id))) ||
+        (proposal.undoneAt && !events.some(event => event.eventType === "undo"))) {
+      throw apiError(400, `Agent 知识 ${item.id} 缺少完整审批审计`);
+    }
+  }
+}
+
+function runStateRank(status) {
+  return { planned: 0, running: 1, completed: 2, failed: 2, cancelled: 2 }[status];
+}
+
+function shouldAdvanceRun(existing, incoming) {
+  const existingRank = runStateRank(existing.status);
+  const incomingRank = runStateRank(incoming.status);
+  if (incomingRank !== existingRank) return incomingRank > existingRank;
+  if (incomingRank < 2) return false;
+  return `${incoming.completedAt}\u0000${incoming.status}` >
+    `${existing.completed_at}\u0000${existing.status}`;
+}
+
+function shouldAdvanceProposal(existing, incoming) {
+  if (existing.status === "pending") return incoming.status !== "pending";
+  if (existing.status === "approved" && !existing.undone_at && incoming.undoneAt) {
+    return true;
+  }
+  if (existing.status !== incoming.status && incoming.status !== "pending") {
+    return `${incoming.decidedAt}\u0000${incoming.status}` >
+      `${existing.decided_at}\u0000${existing.status}`;
+  }
+  return false;
+}
+
+function deprecateLinkedEntries(entryIds, proposalId = "") {
+  for (const entryId of entryIds) {
+    if (proposalId && statements.findActiveApprovalReference.get(
+      proposalId, entryId, entryId
+    )) continue;
+    const row = statements.find.get(entryId);
+    if (!row || row.status === "deprecated") continue;
+    statements.deprecateEntry.run(new Date().toISOString(), entryId);
+    const deprecated = rowToEntry(statements.find.get(entryId));
+    appendLocalState("upsert", entryId, deprecated);
+  }
+}
+
+function writeApprovalMergeAudit(
+  proposalId,
+  runId,
+  entryIds,
+  canonicalId,
+  undone,
+  createdAt
+) {
+  const id = crypto.createHash("sha256")
+    .update(`approval-merge\n${proposalId}\n${entryIds.join("\n")}\n${canonicalId}\n${undone}`)
+    .digest("hex");
+  statements.insertImportedAudit.run(
+    id,
+    "undo",
+    "sync",
+    runId,
+    proposalId,
+    canonicalId,
+    JSON.stringify({
+      action: undone ? "merge-undone-approvals" : "canonicalize-approvals",
+      approvalEntryIds: entryIds,
+      canonicalEntryId: canonicalId
+    }),
+    createdAt
+  );
+}
+
+function writeDecisionConflictAudit(approved, rejected, approvalEntryIds) {
+  const orderedDecisions = [
+    `approved:${approved.decidedAt}:${approved.approvedBy}`,
+    `rejected:${rejected.decidedAt}`
+  ].sort();
+  const id = crypto.createHash("sha256")
+    .update(`proposal-decision-conflict\n${approved.id}\n${orderedDecisions.join("\n")}`)
+    .digest("hex");
+  const createdAt = [approved.decidedAt, rejected.decidedAt]
+    .filter(Boolean)
+    .sort()
+    .at(-1) || approved.createdAt;
+  statements.insertImportedAudit.run(
+    id,
+    "rejection",
+    "sync",
+    approved.runId,
+    approved.id,
+    approved.approvedEntryId,
+    JSON.stringify({
+      action: "competing-rejection-preserved-approval",
+      approvedEntryId: approved.approvedEntryId,
+      approvalEntryIds,
+      approvedAt: approved.decidedAt,
+      rejectedAt: rejected.decidedAt
+    }),
+    createdAt
+  );
+}
+
+function ledgerDeferred(message) {
+  const error = apiError(409, message);
+  error.code = "ledger_deferred";
+  return error;
+}
+
+function validateApprovalTargets(proposal, stagedProposals = new Map()) {
+  if (proposal.status !== "approved") return [];
+  let entryIds = [...new Set([
+    ...proposal.approvalEntryIds,
+    proposal.approvedEntryId
+  ].filter(Boolean))];
+  if (proposal.canonicalContentHash &&
+      proposal.approvedEntryId !== proposalEntryId(proposal.id)) {
+    entryIds = [proposal.approvedEntryId];
+    proposal.approvalEntryIds = entryIds;
+  }
+  if (!entryIds.length || !entryIds.includes(proposal.approvedEntryId)) {
+    throw apiError(400, "approved proposal 缺少有效审批知识关联");
+  }
+  const expectedId = proposalEntryId(proposal.id);
+  const sharedCanonicalTargetId = contentCanonicalEntryId(proposal.content);
+  if (!entryIds.includes(expectedId) &&
+      !entryIds.includes(sharedCanonicalTargetId)) {
+    throw apiError(409, "审批知识确定性 ID 与 proposal 不匹配");
+  }
+  const rows = entryIds.map(entryId => {
+    const row = statements.find.get(entryId);
+    if (!row) {
+      throw ledgerDeferred(`审批知识 ${entryId} 尚未同步，ledger 已延后`);
+    }
+    const entry = rowToEntry(row);
+    const directTarget = entryId === expectedId;
+    const sharedCanonical = entryId === sharedCanonicalTargetId;
+    const owner = directTarget ? null : (
+      stagedProposals.get(entry.provenance?.proposalId || "") ||
+      statements.findProposal.get(entry.provenance?.proposalId || "") ||
+      [...stagedProposals.values()].find(item =>
+        item.status === "approved" && item.approvedEntryId === entryId
+      ) ||
+      statements.findProposalByApprovedEntry.get(entryId)
+    );
+    const expectedSourceRunId = directTarget
+      ? proposal.runId
+      : (entry.provenance?.runId || owner?.runId || owner?.run_id);
+    if ((directTarget && (
+          entry.agentRunId !== proposal.runId ||
+          entry.provenance?.runId !== proposal.runId ||
+          entry.provenance?.proposalId !== proposal.id
+        )) ||
+        (!directTarget && (
+          !sharedCanonical
+        )) ||
+        (directTarget && entry.provenance?.origin !== "agent") ||
+        entry.title !== proposal.title ||
+        entry.content !== proposal.content ||
+        entry.summary !== proposal.summary ||
+        entry.project !== proposal.project ||
+        canonicalJson(entry.tags) !== canonicalJson(proposal.tags) ||
+        entry.source !== `agent://${expectedSourceRunId}` ||
+        entry.confidence !== proposal.confidence) {
+      const fields = [];
+      if (entry.title !== proposal.title) fields.push("title");
+      if (entry.content !== proposal.content) fields.push("content");
+      if (entry.summary !== proposal.summary) fields.push("summary");
+      if (entry.project !== proposal.project) fields.push("project");
+      if (canonicalJson(entry.tags) !== canonicalJson(proposal.tags)) fields.push("tags");
+      if (entry.source !== `agent://${expectedSourceRunId}`) fields.push("source");
+      if (entry.confidence !== proposal.confidence) fields.push("confidence");
+      if (!fields.length) fields.push("provenance");
+      throw apiError(409, `审批知识 ${entryId} 与 proposal 不匹配：${fields.join(",")}`);
+    }
+    if (proposal.undoneAt) {
+      const sharedActiveReference = statements.findActiveApprovalReference.get(
+        proposal.id, entryId, entryId
+      );
+      if (entry.status !== "deprecated" && !sharedActiveReference) {
+        throw ledgerDeferred(`撤销知识 ${entryId} 的 deprecated 状态尚未同步`);
+      }
+    } else if (!["draft", "verified"].includes(entry.status)) {
+      throw apiError(409, `审批知识 ${entryId} 生命周期不正确`);
+    }
+    return row;
+  });
+  return rows;
+}
+
+function canonicalizeDuplicateApprovalTarget(proposal, stagedProposals = new Map()) {
+  const currentTarget = proposal.status === "approved"
+    ? statements.find.get(proposal.approvedEntryId)
+    : null;
+  if (proposal.status !== "approved" ||
+      (currentTarget && currentTarget.status !== "deprecated")) return false;
+  const duplicate = statements.findByContent.get(contentKey(proposal.content));
+  if (!duplicate) return false;
+  const row = statements.find.get(duplicate.id);
+  const entry = rowToEntry(row);
+  const owner = statements.findProposalByApprovedEntry.get(duplicate.id) ||
+    [...stagedProposals.values()].find(item =>
+      item.status === "approved" && item.approvedEntryId === duplicate.id
+    );
+  const ownerId = owner?.id;
+  const ownerRunId = owner?.runId || owner?.run_id;
+  if (!owner || entry.provenance?.origin !== "agent" ||
+      entry.provenance?.proposalId !== ownerId ||
+      entry.provenance?.runId !== ownerRunId ||
+      entry.title !== proposal.title ||
+      entry.content !== proposal.content ||
+      !["draft", "verified"].includes(entry.status)) {
+    throw apiError(409, "重复内容审批目标与现有 canonical 知识不兼容");
+  }
+  const sharedId = contentCanonicalEntryId(proposal.content);
+  if (!statements.find.get(sharedId)) {
+    statements.deprecateEntry.run(new Date().toISOString(), duplicate.id);
+    appendLocalState(
+      "upsert",
+      duplicate.id,
+      rowToEntry(statements.find.get(duplicate.id))
+    );
+    const sharedEntry = {
+      ...entry,
+      id: sharedId,
+      status: entry.status,
+      provenance: {
+        ...entry.provenance,
+        contentCanonicalizedFrom: duplicate.id
+      },
+      updatedAt: new Date().toISOString()
+    };
+    replaceEntryRaw(sharedEntry);
+    appendLocalState("upsert", sharedId, rowToEntry(statements.find.get(sharedId)));
+  }
+  const ownerEntries = [sharedId];
+  statements.updateImportedProposal.run(
+    "approved", owner.decidedAt || owner.decided_at, sharedId,
+    owner.approvedBy || owner.approved_by, owner.undoneAt || owner.undone_at || "",
+    JSON.stringify(ownerEntries), contentKey(proposal.content), ownerId
+  );
+  const originalTarget = proposal.approvedEntryId;
+  proposal.approvedEntryId = sharedId;
+  proposal.approvalEntryIds = [sharedId];
+  proposal.canonicalContentHash = contentKey(proposal.content);
+  return { originalTarget, canonicalTarget: sharedId };
+}
+
+function writeContentCanonicalizationAudit(proposal, mapping) {
+  const id = crypto.createHash("sha256")
+    .update(`content-canonicalization\n${proposal.id}\n${mapping.originalTarget}\n${mapping.canonicalTarget}`)
+    .digest("hex");
+  statements.insertImportedAudit.run(
+    id, "write", "sync", proposal.runId, proposal.id, mapping.canonicalTarget,
+    JSON.stringify({
+      action: "canonicalize-duplicate-approved-content",
+      originalTarget: mapping.originalTarget,
+      canonicalTarget: mapping.canonicalTarget,
+      contentHash: proposal.canonicalContentHash
+    }),
+    proposal.decidedAt || proposal.createdAt
+  );
+}
+
+function importAgentLedger(rawLedger, options = {}) {
+  const ledger = options.normalized ? rawLedger : normalizeAgentLedger(rawLedger);
+  const action = () => {
+    const deferredProposalIds = new Set();
+    const stagedProposals = new Map(
+      ledger.proposals.map(proposal => [proposal.id, proposal])
+    );
+    for (const run of ledger.runs) {
+      const priorRun = statements.findAgentRun.get(run.id);
+      if (priorRun) {
+        const existingRun = rowToAgentRun(priorRun);
+        const immutableExisting = {
+          goal: existingRun.goal, outputFormat: existingRun.outputFormat,
+          outputMode: existingRun.outputMode, provider: existingRun.provider,
+          model: existingRun.model, createdAt: existingRun.createdAt,
+          plan: existingRun.plan, sourceIds: existingRun.sourceIds,
+          sourcePins: existingRun.sourcePins,
+          permissionScope: existingRun.permissionScope
+        };
+        const immutableIncoming = {
+          goal: run.goal, outputFormat: run.outputFormat, outputMode: run.outputMode,
+          provider: run.provider, model: run.model, createdAt: run.createdAt,
+          plan: run.plan, sourceIds: run.sourceIds, sourcePins: run.sourcePins,
+          permissionScope: run.permissionScope
+        };
+        if (canonicalJson(immutableExisting) !== canonicalJson(immutableIncoming)) {
+          const fields = Object.keys(immutableExisting).filter(key =>
+            canonicalJson(immutableExisting[key]) !== canonicalJson(immutableIncoming[key])
+          );
+          throw apiError(409, `agent run ${run.id} 的不可变字段冲突：${fields.join(", ")}`);
+        }
+      }
+      statements.insertImportedAgentRun.run(
+        run.id, run.goal, run.outputFormat, run.outputMode, run.provider, run.model,
+        run.status, run.createdAt, run.startedAt, run.completedAt,
+        JSON.stringify(run.plan), JSON.stringify(run.sourceIds), run.result, run.error,
+        JSON.stringify(run.permissionScope), JSON.stringify(run.sourcePins)
+      );
+      const existing = statements.findAgentRun.get(run.id);
+      if (existing && shouldAdvanceRun(existing, run)) {
+        statements.updateImportedAgentRun.run(
+          run.status, run.startedAt, run.completedAt, run.result, run.error, run.id
+        );
+      }
+    }
+    for (const proposal of ledger.proposals) {
+      const priorProposal = statements.findProposal.get(proposal.id);
+      if (priorProposal?.undone_at && !proposal.undoneAt) continue;
+      const contentCanonicalization =
+        canonicalizeDuplicateApprovalTarget(proposal, stagedProposals);
+      try {
+        validateApprovalTargets(proposal, stagedProposals);
+      } catch (error) {
+        if (error.code !== "ledger_deferred" &&
+            !(options.deferInvalidTargets && error.status === 409)) throw error;
+        deferredProposalIds.add(proposal.id);
+        continue;
+      }
+      if (priorProposal) {
+        const existingProposal = rowToProposal(priorProposal);
+        const immutableExisting = {
+          runId: existingProposal.runId, title: existingProposal.title,
+          content: existingProposal.content, summary: existingProposal.summary,
+          project: existingProposal.project, tags: existingProposal.tags,
+          sourceIds: existingProposal.sourceIds,
+          sourceVersions: existingProposal.sourceVersions,
+          confidence: existingProposal.confidence, rationale: existingProposal.rationale,
+          createdAt: existingProposal.createdAt
+        };
+        const immutableIncoming = {
+          runId: proposal.runId, title: proposal.title, content: proposal.content,
+          summary: proposal.summary, project: proposal.project, tags: proposal.tags,
+          sourceIds: proposal.sourceIds, sourceVersions: proposal.sourceVersions,
+          confidence: proposal.confidence, rationale: proposal.rationale,
+          createdAt: proposal.createdAt
+        };
+        if (canonicalJson(immutableExisting) !== canonicalJson(immutableIncoming)) {
+          throw apiError(409, `proposal ${proposal.id} 的不可变字段冲突`);
+        }
+      }
+      statements.insertImportedProposal.run(
+        proposal.id, proposal.runId, proposal.title, proposal.content, proposal.summary,
+        proposal.project, JSON.stringify(proposal.tags), JSON.stringify(proposal.sourceIds),
+        proposal.confidence, proposal.rationale, proposal.status, proposal.createdAt,
+        proposal.decidedAt, proposal.approvedEntryId, proposal.approvedBy,
+        proposal.undoneAt, JSON.stringify(proposal.sourceVersions),
+        JSON.stringify(proposal.approvalEntryIds), proposal.canonicalContentHash
+      );
+      if (contentCanonicalization) {
+        writeContentCanonicalizationAudit(proposal, contentCanonicalization);
+      }
+      const existing = statements.findProposal.get(proposal.id);
+      if (priorProposal &&
+          new Set([priorProposal.status, proposal.status]).size === 2 &&
+          [priorProposal.status, proposal.status].every(status =>
+            ["approved", "rejected"].includes(status)
+          )) {
+        const prior = rowToProposal(priorProposal);
+        const approved = prior.status === "approved" ? prior : proposal;
+        const rejected = prior.status === "rejected" ? prior : proposal;
+        const approvalEntryIds = [...new Set([
+          ...approved.approvalEntryIds,
+          approved.approvedEntryId
+        ].filter(Boolean))].sort();
+        if (!approved.approvedEntryId || !approvalEntryIds.length) {
+          throw apiError(409, "竞争审批缺少已批准知识关联");
+        }
+        statements.updateImportedProposal.run(
+          "approved",
+          approved.decidedAt,
+          approved.approvedEntryId,
+          approved.approvedBy,
+          approved.undoneAt,
+          JSON.stringify(approvalEntryIds),
+          approved.canonicalContentHash,
+          proposal.id
+        );
+        if (approved.undoneAt) {
+          deprecateLinkedEntries(approvalEntryIds, proposal.id);
+        }
+        writeDecisionConflictAudit(approved, rejected, approvalEntryIds);
+        continue;
+      }
+      if (priorProposal && priorProposal.status === "approved" &&
+          proposal.status === "approved") {
+        const prior = rowToProposal(priorProposal);
+        const approvalEntryIds = [...new Set([
+          ...prior.approvalEntryIds,
+          prior.approvedEntryId,
+          ...proposal.approvalEntryIds,
+          proposal.approvedEntryId
+        ].filter(Boolean))].sort();
+        const convergentId = proposalEntryId(proposal.id);
+        const sharedRecord = [prior, proposal].find(item =>
+          item.canonicalContentHash === contentKey(item.content) &&
+          item.approvedEntryId
+        );
+        const canonicalId = sharedRecord?.approvedEntryId ||
+          (approvalEntryIds.includes(convergentId)
+            ? convergentId
+            : approvalEntryIds[0]);
+        const canonicalContentHash = sharedRecord?.canonicalContentHash || "";
+        const mergedApprovalEntryIds = sharedRecord
+          ? [canonicalId]
+          : approvalEntryIds;
+        const decisions = [prior, proposal].sort((left, right) =>
+          `${left.decidedAt}\u0000${left.approvedBy}\u0000${left.approvedEntryId}`
+            .localeCompare(
+              `${right.decidedAt}\u0000${right.approvedBy}\u0000${right.approvedEntryId}`
+            )
+        );
+        const undoneAt = [prior.undoneAt, proposal.undoneAt]
+          .filter(Boolean)
+          .sort()[0] || "";
+        statements.updateImportedProposal.run(
+          "approved",
+          decisions[0].decidedAt,
+          canonicalId,
+          decisions[0].approvedBy,
+          undoneAt,
+          JSON.stringify(mergedApprovalEntryIds),
+          canonicalContentHash,
+          proposal.id
+        );
+        const losingIds = undoneAt
+          ? mergedApprovalEntryIds
+          : approvalEntryIds.filter(entryId => entryId !== canonicalId);
+        const canonicalSeedRow = statements.find.get(canonicalId) || approvalEntryIds
+          .map(entryId => statements.find.get(entryId))
+          .find(Boolean);
+        const canonicalSeed = canonicalSeedRow ? rowToEntry(canonicalSeedRow) : null;
+        deprecateLinkedEntries(losingIds, proposal.id);
+        if (!undoneAt && !statements.find.get(canonicalId) && canonicalSeed) {
+          const canonicalEntry = {
+            ...canonicalSeed,
+            id: canonicalId,
+            status: canonicalSeed.status === "deprecated" ? "draft" : canonicalSeed.status,
+            provenance: {
+              ...canonicalSeed.provenance,
+              canonicalizedFrom: canonicalSeed.id,
+              proposalId: proposal.id
+            },
+            updatedAt: new Date().toISOString()
+          };
+          replaceEntryRaw(canonicalEntry);
+          appendLocalState("upsert", canonicalId, rowToEntry(statements.find.get(canonicalId)));
+        }
+        if (approvalEntryIds.length > 1 ||
+            prior.approvedBy !== proposal.approvedBy ||
+            prior.decidedAt !== proposal.decidedAt ||
+            undoneAt) {
+          writeApprovalMergeAudit(
+            proposal.id,
+            proposal.runId,
+            mergedApprovalEntryIds,
+            canonicalId,
+            undoneAt,
+            decisions[0].decidedAt
+          );
+        }
+        continue;
+      }
+      const canAdvance = existing && shouldAdvanceProposal(existing, proposal);
+      if (canAdvance) {
+        statements.updateImportedProposal.run(
+          proposal.status, proposal.decidedAt, proposal.approvedEntryId,
+          proposal.approvedBy, proposal.undoneAt,
+          JSON.stringify(proposal.approvalEntryIds),
+          proposal.canonicalContentHash, proposal.id
+        );
+      }
+    }
+    for (const event of ledger.audit) {
+      if (event.proposalId && deferredProposalIds.has(event.proposalId)) continue;
+      const priorAudit = statements.findAudit.get(event.id);
+      if (priorAudit && canonicalJson(rowToAudit(priorAudit)) !== canonicalJson(event)) {
+        throw apiError(409, `audit ${event.id} 的不可变记录冲突`);
+      }
+      statements.insertImportedAudit.run(
+        event.id, event.eventType, event.actor, event.runId, event.proposalId,
+        event.entryId, JSON.stringify(event.details), event.createdAt
+      );
+    }
+    return {
+      runs: ledger.runs.length,
+      proposals: ledger.proposals.length - deferredProposalIds.size,
+      audit: ledger.audit.filter(event =>
+        !event.proposalId || !deferredProposalIds.has(event.proposalId)
+      ).length,
+      deferredProposalIds: [...deferredProposalIds]
+    };
+  };
+  return options.inTransaction ? action() : runTransaction(action);
+}
+
+function writeAudit(eventType, fields = {}) {
+  statements.insertAudit.run(
+    crypto.randomUUID(),
+    eventType,
+    boundedText(fields.actor || "system", "actor", 200, { required: true }),
+    fields.runId || "",
+    fields.proposalId || "",
+    fields.entryId || "",
+    JSON.stringify(fields.details || {}),
+    new Date().toISOString()
+  );
+}
+
+function sourceVersionPin(id) {
+  const row = statements.find.get(id);
+  const version = statements.findEntityVersion.get(id);
+  if (!row || !version) return null;
+  const entry = rowToEntry(row);
+  return {
+    id,
+    opId: version.op_id,
+    contentHash: crypto.createHash("sha256").update(row.content).digest("hex"),
+    semanticRevision: entry.semanticRevision,
+    semanticHash: semanticEntryHash(entry),
+    lifecycle: row.status || "raw",
+    title: row.title,
+    content: row.content,
+    summary: row.summary,
+    source: row.source,
+    project: row.project || "",
+    tags: normalizeTags(safeJson(row.tags_json, [])),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    sourceAt: row.updated_at || row.created_at
+  };
+}
+
+function semanticEntryHash(entry) {
+  return crypto.createHash("sha256").update(canonicalJson({
+    title: entry.title,
+    content: entry.content,
+    summary: entry.summary,
+    source: entry.source,
+    project: entry.project,
+    tags: entry.tags,
+    status: entry.status
+  })).digest("hex");
+}
+
+function backfillRunSourcePins() {
+  runTransaction(() => {
+    for (const runRow of statements.listAgentRuns.all()) {
+      const existingPins = safeJson(runRow.source_pins_json, []);
+      const sourceIds = normalizeStringArray(
+        safeJson(runRow.source_ids_json, []),
+        20
+      );
+      let completeExistingPins = false;
+      try {
+        completeExistingPins = Array.isArray(existingPins) &&
+          existingPins.length === sourceIds.length &&
+          existingPins.every((pin, index) =>
+            validateSourcePin(pin).id === sourceIds[index]
+          );
+      } catch {
+        completeExistingPins = false;
+      }
+      if (completeExistingPins) continue;
+      const proposals = statements.listProposals.all(runRow.id);
+      const historicalPins = proposals.flatMap(row =>
+        safeJson(row.source_versions_json, [])
+      );
+      const scope = portablePermissionScope(runRow.permission_scope_json);
+      const pins = sourceIds.map(sourceId => {
+        const current = sourceVersionPin(sourceId);
+        if (current) {
+          return {
+            ...current,
+            project: scope.project || current.project,
+            sourceAt: scope.startAt && current.sourceAt < scope.startAt
+              ? scope.startAt
+              : scope.endAt && current.sourceAt > scope.endAt
+                ? scope.endAt
+                : current.sourceAt
+          };
+        }
+        const historical = historicalPins.find(pin => pin.id === sourceId);
+        const unavailableContent = `Unavailable legacy source ${sourceId}`;
+        const fallbackSnapshot = {
+          title: "Deprecated legacy source",
+          content: unavailableContent,
+          summary: "",
+          source: "",
+          project: scope.project,
+          tags: [],
+          status: "deprecated"
+        };
+        return {
+          id: sourceId,
+          opId: String(historical?.opId || `legacy-missing:${sourceId}`),
+          contentHash: crypto.createHash("sha256")
+            .update(unavailableContent)
+            .digest("hex"),
+          semanticRevision: 1,
+          semanticHash: semanticEntryHash(fallbackSnapshot),
+          lifecycle: "deprecated",
+          title: fallbackSnapshot.title,
+          content: fallbackSnapshot.content,
+          summary: fallbackSnapshot.summary,
+          source: fallbackSnapshot.source,
+          project: fallbackSnapshot.project,
+          tags: fallbackSnapshot.tags,
+          createdAt: runRow.created_at,
+          updatedAt: "",
+          sourceAt: runRow.created_at
+        };
+      });
+      statements.updateRunSourcePins.run(JSON.stringify(pins), runRow.id);
+      for (const proposalRow of proposals) {
+        const proposalIds = normalizeStringArray(
+          safeJson(proposalRow.source_ids_json, []),
+          20
+        );
+        const proposalPins = proposalIds.map(sourceId =>
+          pins.find(pin => pin.id === sourceId)
+        ).filter(Boolean);
+        statements.updateProposalSourceVersions.run(
+          JSON.stringify(proposalPins),
+          proposalRow.id
+        );
+      }
+    }
+  });
+}
+
+function staleSourceError(id, reason) {
+  const error = apiError(
+    409,
+    `候选知识来源已过期（${id}：${reason}），请重新运行 Agent 生成候选`
+  );
+  error.code = "stale_source";
+  return error;
+}
+
+function proposalEntryId(proposalId) {
+  return `agent-entry-${crypto.createHash("sha256")
+    .update(`AIKnowledgeInbox.ProposalEntry\n${proposalId}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+}
+
+function contentCanonicalEntryId(content) {
+  return `agent-content-${contentKey(content).slice(0, 32)}`;
+}
+
+function pinsForRunSources(run, sourceIds) {
+  if (sourceIds.some(id => !run.sourceIds.includes(id))) {
+    throw apiError(400, "候选知识来源超出关联 run");
+  }
+  const pins = sourceIds.map(id => run.sourcePins.find(pin => pin.id === id));
+  if (pins.some(pin => !pin)) {
+    throw staleSourceError("run", "运行未固定完整来源版本");
+  }
+  return pins;
+}
+
+function assertProposalMatchesRun(proposal, run) {
+  const expectedPins = pinsForRunSources(run, proposal.sourceIds);
+  if (canonicalJson(proposal.sourceVersions) !== canonicalJson(expectedPins)) {
+    throw staleSourceError("run", "候选来源固定信息与运行计划不一致");
+  }
+  if (run.permissionScope.project &&
+      proposal.project !== run.permissionScope.project) {
+    throw apiError(400, "候选知识超出关联 run 项目权限");
+  }
+  expectedPins.forEach(pin => validatePinScope(pin, run.permissionScope));
+  return expectedPins;
+}
+
+function revalidateSourcePins(pins) {
+  for (const pin of pins) {
+    const source = statements.find.get(pin.id);
+    if (!source) throw staleSourceError(pin.id, "已删除");
+    if (source.status === "deprecated") throw staleSourceError(pin.id, "已废弃");
+    const entry = rowToEntry(source);
+    if (entry.semanticRevision !== pin.semanticRevision ||
+        semanticEntryHash(entry) !== pin.semanticHash ||
+        source.status !== pin.lifecycle ||
+        source.project !== pin.project ||
+        crypto.createHash("sha256").update(source.content).digest("hex") !==
+          pin.contentHash) {
+      throw staleSourceError(pin.id, "内容、范围或生命周期已变化");
+    }
+  }
+}
+
+function validateSourceIds(value, allowedIds = null) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 20 ||
+      value.some(id => typeof id !== "string" || !id.trim() || id.length > 100)) {
+    throw apiError(400, "sourceIds 必须包含 1 到 20 个有效字符串");
+  }
+  if (new Set(value.map(id => id.trim())).size !== value.length) {
+    throw apiError(400, "sourceIds 不能重复");
+  }
+  const sourceIds = normalizeStringArray(value, 20);
+  if (!sourceIds.length) throw apiError(400, "至少需要一个 sourceId");
+  for (const id of sourceIds) {
+    if (allowedIds && !allowedIds.has(id)) {
+      throw apiError(400, `sourceId 不在本次运行范围内：${id}`);
+    }
+
+    const source = statements.find.get(id);
+    if (!source) throw apiError(400, `sourceId 不存在：${id}`);
+    if (source.status === "deprecated") {
+      throw apiError(400, `sourceId 已废弃：${id}`);
+    }
+  }
+  return sourceIds;
+}
+
+function validateRequiredSourceIds(value, label) {
+  const sourceIds = validateLedgerStringArray(value, label, 20);
+  if (!sourceIds.length || sourceIds.length !== value.length) {
+    throw apiError(400, `${label} 必须包含至少一个且不能重复`);
+  }
+  return sourceIds;
+}
+
+function createAgentRun(input) {
+  requireObject(input, "Agent 运行参数");
+  if (typeof input.goal !== "string" ||
+      (input.outputFormat !== undefined && typeof input.outputFormat !== "string") ||
+      (input.model !== undefined && typeof input.model !== "string")) {
+    throw apiError(400, "Agent 运行字段类型不正确");
+  }
+  const goal = boundedText(input.goal, "goal", 1200, { required: true });
+  const outputFormat = boundedText(input.outputFormat || "report", "outputFormat", 80, {
+    required: true
+  });
+  if (!["report", "brief", "actions", "comparison"].includes(outputFormat)) {
+    throw apiError(400, "outputFormat 不受支持");
+  }
+  const provider = input.provider === "ollama"
+    ? "ollama"
+    : input.provider === "browser" ? "browser" : "";
+  if (!provider) throw apiError(400, "provider 仅支持 browser 或 ollama");
+  if (input.externalSupplementation ||
+      (input.permissionScope && input.permissionScope.externalSupplementation)) {
+    throw apiError(400, "外部补充尚未实现，必须保持关闭");
+  }
+  const sourceIds = validateSourceIds(input.sourceIds);
+  const scope = input.permissionScope === undefined ? {} :
+    requireObject(input.permissionScope, "permissionScope");
+  const permissionScope = {
+    mode: "propose-only",
+    project: boundedText(scope.project ?? input.project, "project", 200),
+    startAt: boundedText(scope.startAt ?? input.startAt, "startAt", 80),
+    endAt: boundedText(scope.endAt ?? input.endAt, "endAt", 80),
+    externalSupplementation: false
+  };
+  for (const field of ["startAt", "endAt"]) {
+    if (permissionScope[field] &&
+        !Number.isFinite(validatedTimestamp(permissionScope[field]))) {
+      throw apiError(400, `${field} 必须是 ISO 8601 时间`);
+    }
+  }
+  if (permissionScope.startAt && permissionScope.endAt &&
+      Date.parse(permissionScope.startAt) > Date.parse(permissionScope.endAt)) {
+    throw apiError(400, "startAt 不能晚于 endAt");
+  }
+  const plan = input.plan === undefined ? {} : requireObject(input.plan, "plan");
+  if (canonicalJson(stripSensitiveKeys(plan)) !== canonicalJson(plan)) {
+    throw apiError(400, "plan 不能包含凭据或密钥字段");
+  }
+  if (JSON.stringify(plan).length > 20000) throw apiError(400, "plan 格式不正确");
+  const id = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  return runTransaction(() => {
+    const sourcePins = sourceIds.map(sourceId => {
+      const pin = sourceVersionPin(sourceId);
+      if (!pin) throw apiError(409, `无法固定 sourceId 版本：${sourceId}`);
+      if (pin.lifecycle === "deprecated") {
+        throw apiError(400, `sourceId 已废弃：${sourceId}`);
+      }
+      validatePinScope(pin, permissionScope);
+      return pin;
+    });
+    statements.insertAgentRun.run(
+      id,
+      goal,
+      outputFormat,
+      "propose-only",
+      provider,
+      boundedText(input.model, "model", 100),
+      createdAt,
+      JSON.stringify(plan),
+      JSON.stringify(sourceIds),
+      JSON.stringify(permissionScope),
+      JSON.stringify(sourcePins)
+    );
+    writeAudit("agent_run", {
+      runId: id,
+      actor: "user",
+      details: { action: "created", provider, sourceIds, sourcePins, permissionScope }
+    });
+    return rowToAgentRun(statements.findAgentRun.get(id));
+  });
+}
+
+function transitionAgentRun(id, action, input = {}) {
+  requireObject(input, "Agent 状态参数");
+  if (action === "complete" && typeof input.result !== "string") {
+    throw apiError(400, "result 必须是字符串");
+  }
+  if (action === "fail" && typeof input.error !== "string") {
+    throw apiError(400, "error 必须是字符串");
+  }
+  const row = statements.findAgentRun.get(id);
+  if (!row) throw apiError(404, "Agent 运行不存在");
+  return runTransaction(() => {
+    const now = new Date().toISOString();
+    let result;
+    if (action === "start") {
+      const runRecord = rowToAgentRun(statements.findAgentRun.get(id));
+      const pins = pinsForRunSources(runRecord, runRecord.sourceIds);
+      revalidateSourcePins(pins);
+      result = statements.startAgentRun.run(now, id);
+    } else if (action === "complete") {
+      const text = boundedText(input.result, "result", 200000, { required: true });
+      result = statements.completeAgentRun.run(now, text, id);
+    } else if (action === "fail") {
+      result = statements.failAgentRun.run(
+        now,
+        boundedText(input.error, "error", 4000, { required: true }),
+        id
+      );
+    } else if (action === "cancel") {
+      result = statements.cancelAgentRun.run(now, id);
+    } else {
+      throw apiError(400, "未知 Agent 状态变更");
+    }
+    if (!result.changes) {
+      const current = statements.findAgentRun.get(id);
+      if (action === "cancel" && current.status === "cancelled") {
+        return rowToAgentRun(current);
+      }
+      throw apiError(409, `无法从 ${current.status} 执行 ${action}`);
+    }
+    writeAudit("agent_run", { runId: id, actor: "user", details: { action } });
+    return rowToAgentRun(statements.findAgentRun.get(id));
+  });
+}
+
+function createProposal(runId, input) {
+  requireObject(input, "候选知识");
+  if (typeof input.title !== "string" || typeof input.content !== "string" ||
+      typeof input.summary !== "string" ||
+      typeof input.project !== "string" ||
+      typeof input.rationale !== "string" ||
+      typeof input.confidence !== "number" ||
+      !Array.isArray(input.tags) || input.tags.length > 20 ||
+      input.tags.some(tag => typeof tag !== "string" || tag.length > 80)) {
+    throw apiError(400, "候选知识字段类型不正确");
+  }
+  const run = statements.findAgentRun.get(runId);
+  if (!run) throw apiError(404, "Agent 运行不存在");
+  if (run.status !== "running") throw apiError(409, "只能为运行中的 Agent 创建候选知识");
+  const runRecord = rowToAgentRun(run);
+  const sourceIds = validateRequiredSourceIds(input.sourceIds, "proposal sourceIds");
+  const sourceVersions = pinsForRunSources(runRecord, sourceIds);
+  const confidence = Number(input.confidence);
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    throw apiError(400, "confidence 必须在 0 到 1 之间");
+  }
+  const proposal = {
+    id: crypto.randomUUID(),
+    title: boundedText(input.title, "title", 300, { required: true }),
+    content: boundedText(input.content, "content", 200000, { required: true }),
+    summary: boundedText(input.summary, "summary", 4000),
+    project: boundedText(input.project, "project", 200),
+    tags: normalizeTags(input.tags),
+    sourceIds,
+    sourceVersions,
+    confidence,
+    rationale: boundedText(input.rationale, "rationale", 4000, { required: true }),
+    createdAt: new Date().toISOString()
+  };
+  return runTransaction(() => {
+    assertProposalMatchesRun(proposal, runRecord);
+    revalidateSourcePins(sourceVersions);
+    statements.insertProposal.run(
+      proposal.id,
+      runId,
+      proposal.title,
+      proposal.content,
+      proposal.summary,
+      proposal.project,
+      JSON.stringify(proposal.tags),
+      JSON.stringify(proposal.sourceIds),
+      proposal.confidence,
+      proposal.rationale,
+      proposal.createdAt,
+      JSON.stringify(proposal.sourceVersions)
+    );
+    writeAudit("proposal", {
+      runId,
+      proposalId: proposal.id,
+      actor: "agent",
+      details: { sourceIds, confidence }
+    });
+    return rowToProposal(statements.findProposal.get(proposal.id));
+  });
+}
+
+function approveProposal(id, input = {}) {
+  requireObject(input, "审批参数");
+  if (typeof input.approvedBy !== "string" ||
+      (input.idempotencyKey !== undefined && typeof input.idempotencyKey !== "string") ||
+      (input.entryStatus !== undefined && typeof input.entryStatus !== "string")) {
+    throw apiError(400, "审批字段类型不正确");
+  }
+  const proposalRow = statements.findProposal.get(id);
+  if (!proposalRow) throw apiError(404, "候选知识不存在");
+  if (proposalRow.status === "approved") {
+    if (input.idempotencyKey &&
+        input.idempotencyKey === proposalRow.idempotency_key &&
+        !proposalRow.undone_at) {
+      const approvedEntry = statements.find.get(proposalRow.approved_entry_id);
+      if (!approvedEntry) throw apiError(409, "审批创建的知识不存在");
+      return {
+        proposal: rowToProposal(proposalRow),
+        entry: rowToEntry(approvedEntry),
+        idempotent: true
+      };
+    }
+    throw apiError(409, "候选知识已经审批");
+  }
+  if (proposalRow.status !== "pending") throw apiError(409, "已拒绝的候选知识不能审批");
+  const run = statements.findAgentRun.get(proposalRow.run_id);
+  if (!run || run.status !== "completed") {
+    throw apiError(409, "只有已完成运行的候选知识可以审批");
+  }
+  const actor = boundedText(input.approvedBy, "approvedBy", 200, { required: true });
+  const idempotencyKey = boundedText(
+    input.idempotencyKey || crypto.randomUUID(),
+    "idempotencyKey",
+    120,
+    { required: true }
+  );
+  const entryStatus = input.entryStatus || "draft";
+  if (!["draft", "verified"].includes(entryStatus)) {
+    throw apiError(400, "审批写入状态只能是 draft 或 verified");
+  }
+  const proposal = rowToProposal(proposalRow);
+  const runRecord = rowToAgentRun(run);
+  const key = contentKey(proposal.content);
+  const duplicate = statements.findByContent.get(key);
+  const entryId = proposalEntryId(proposal.id);
+  if (duplicate && duplicate.id !== entryId) {
+    throw apiError(409, `这段内容已经保存过：${duplicate.title}`);
+  }
+  const now = new Date().toISOString();
+  const provenance = {
+    origin: "agent",
+    runId: run.id,
+    proposalId: proposal.id,
+    sourceIds: proposal.sourceIds,
+    provider: run.provider,
+    model: run.model,
+    rationale: proposal.rationale,
+    confidence: proposal.confidence,
+    createdAt: proposal.createdAt,
+    approvedBy: actor,
+    approvedAt: now,
+    status: entryStatus
+  };
+  const entry = runTransaction(() => {
+    const pins = assertProposalMatchesRun(proposal, runRecord);
+    revalidateSourcePins(pins);
+    let created;
+    const existingEntry = statements.find.get(entryId);
+    if (existingEntry) {
+      created = rowToEntry(existingEntry);
+      if (contentKey(created.content) !== key || created.agentRunId !== run.id) {
+        throw apiError(409, "确定性审批知识 ID 与现有知识冲突");
+      }
+    } else {
+      statements.insert.run(
+        entryId, proposal.title, proposal.content, key, `agent://${run.id}`,
+        proposal.project, JSON.stringify(proposal.tags), proposal.summary, now, "",
+        0, "", entryStatus, proposal.confidence, JSON.stringify(provenance), run.id,
+        actor, now, "[]", "[]", 1
+      );
+      statements.removeTombstone.run(entryId);
+      created = rowToEntry(statements.find.get(entryId));
+      appendLocalState("upsert", entryId, created);
+    }
+    const decision = statements.approveProposal.run(
+      now, entryId, actor, idempotencyKey, JSON.stringify([entryId]), id
+    );
+    if (!decision.changes) throw apiError(409, "候选知识审批状态已改变");
+    writeAudit("approval", {
+      actor, runId: run.id, proposalId: id, entryId,
+      details: { entryStatus, idempotencyKey }
+    });
+    writeAudit("write", {
+      actor, runId: run.id, proposalId: id, entryId,
+      details: { provenance, status: entryStatus }
+    });
+    return created;
+  });
+  scheduleSync();
+  return { proposal: rowToProposal(statements.findProposal.get(id)), entry, idempotent: false };
+}
+
+function rejectProposal(id, input = {}) {
+  requireObject(input, "拒绝参数");
+  if ((input.rejectedBy !== undefined && typeof input.rejectedBy !== "string") ||
+      (input.reason !== undefined && typeof input.reason !== "string")) {
+    throw apiError(400, "拒绝字段类型不正确");
+  }
+  const row = statements.findProposal.get(id);
+  if (!row) throw apiError(404, "候选知识不存在");
+  if (row.status !== "pending") throw apiError(409, "只能拒绝待审批候选知识");
+  const actor = boundedText(input.rejectedBy || "user", "rejectedBy", 200, {
+    required: true
+  });
+  return runTransaction(() => {
+    const now = new Date().toISOString();
+    if (!statements.rejectProposal.run(now, id).changes) {
+      throw apiError(409, "候选知识审批状态已改变");
+    }
+    writeAudit("rejection", {
+      actor, runId: row.run_id, proposalId: id,
+      details: { reason: boundedText(input.reason, "reason", 1000) }
+    });
+    return rowToProposal(statements.findProposal.get(id));
+  });
+}
+
+function undoProposal(id, input = {}) {
+  requireObject(input, "撤销参数");
+  if (input.actor !== undefined && typeof input.actor !== "string") {
+    throw apiError(400, "actor 必须是字符串");
+  }
+  const row = statements.findProposal.get(id);
+  if (!row) throw apiError(404, "候选知识不存在");
+  if (row.status !== "approved" || !row.approved_entry_id) {
+    throw apiError(409, "只能撤销已审批写入");
+  }
+  if (row.undone_at) throw apiError(409, "该写入已经撤销");
+  const actor = boundedText(input.actor || "user", "actor", 200, { required: true });
+  validateApprovalTargets(rowToProposal(row));
+  const linkedEntryIds = [...new Set([
+    ...normalizeStringArray(safeJson(row.approval_entry_ids_json, []), 20),
+    row.approved_entry_id
+  ].filter(Boolean))];
+  const linkedRows = linkedEntryIds
+    .map(entryId => statements.find.get(entryId))
+    .filter(Boolean);
+  if (!linkedRows.length) throw apiError(409, "审批创建的知识不存在");
+  const now = new Date().toISOString();
+  const entry = runTransaction(() => {
+    if (!statements.markProposalUndone.run(now, id).changes) {
+      throw apiError(409, "该写入已经撤销");
+    }
+    const deprecatedEntries = [];
+    for (const linkedRow of linkedRows) {
+      const stillReferenced = statements.findActiveApprovalReference.get(
+        id,
+        linkedRow.id,
+        linkedRow.id
+      );
+      if (stillReferenced) {
+        deprecatedEntries.push(rowToEntry(linkedRow));
+        continue;
+      }
+      statements.deprecateEntry.run(now, linkedRow.id);
+      const deprecated = rowToEntry(statements.find.get(linkedRow.id));
+      appendLocalState("upsert", deprecated.id, deprecated);
+      deprecatedEntries.push(deprecated);
+    }
+    const canonical = deprecatedEntries.find(item => item.id === row.approved_entry_id) ||
+      deprecatedEntries[0];
+    writeAudit("undo", {
+      actor, runId: row.run_id, proposalId: id, entryId: canonical.id,
+      details: {
+        policy: "deprecate-tombstone",
+        approvalEntryIds: linkedEntryIds,
+        previousStatuses: Object.fromEntries(
+          linkedRows.map(item => [item.id, item.status || "raw"])
+        )
+      }
+    });
+    return canonical;
+  });
+  scheduleSync();
+  return { proposal: rowToProposal(statements.findProposal.get(id)), entry };
 }
 
 function isValidSyncEntry(entry) {
@@ -1115,7 +3191,15 @@ function durableWriteJson(target, value) {
     fs.closeSync(handle);
   }
   try {
-    fs.renameSync(temporary, target);
+    try {
+      fs.renameSync(temporary, target);
+    } catch (error) {
+      if (!["EEXIST", "EPERM"].includes(error.code) || !fs.existsSync(target)) {
+        throw error;
+      }
+      fs.rmSync(target);
+      fs.renameSync(temporary, target);
+    }
   } finally {
     fs.rmSync(temporary, { force: true });
   }
@@ -1144,7 +3228,10 @@ function readOperationFiles() {
         }
         return validateOperation(operation);
       });
-      validFiles.push({ name: file.name, path: filePath, operations });
+      const agentLedger = parsed.agentLedger === undefined
+        ? null
+        : normalizeAgentLedger(parsed.agentLedger);
+      validFiles.push({ name: file.name, path: filePath, operations, agentLedger });
     } catch (error) {
       degraded.push({
         name: file.name,
@@ -1285,10 +3372,20 @@ function reconcileLegacySnapshot(snapshotInfo) {
       : null;
     if (local && compareRecordTimestamps(remote, local) <= 0) continue;
     const base = mergeVectors(local?.vector || {}, remote.vector);
+    const currentEntryRow = statements.find.get(entityId);
+    const reconciledEntry = remote.kind === "upsert"
+      ? {
+          ...remote.entry,
+          ...normalizeLifecycle(
+            remote.entry,
+            currentEntryRow ? rowToEntry(currentEntryRow) : {}
+          )
+        }
+      : null;
     const reconciled = nextLocalOperation(
       remote.kind,
       entityId,
-      remote.entry,
+      reconciledEntry,
       base,
       operationTimestamp(remote)
     );
@@ -1313,7 +3410,8 @@ function writeOwnOperationFile() {
   atomicWriteJson(OPERATION_FILE, {
     version: 2,
     deviceId: DEVICE_ID,
-    operations: statements.listOwnOperations.all(DEVICE_ID).map(operationFromRow)
+    operations: statements.listOwnOperations.all(DEVICE_ID).map(operationFromRow),
+    agentLedger: exportAgentLedger()
   });
 }
 
@@ -1390,6 +3488,7 @@ async function syncNow() {
   syncState.running = withDatabaseGate(async () => {
     syncState.status = "syncing";
     syncState.lastError = "";
+    syncState.suppressedDeletes = [];
     const remote = readOperationFiles();
     const degraded = [...remote.degraded];
     let pending = remote.files.flatMap(file =>
@@ -1426,6 +3525,37 @@ async function syncNow() {
         name: item.file.name,
         path: item.file.path,
         error: `缺少因果依赖：${item.missing.join(", ")}`,
+        observedAt: new Date().toISOString()
+      });
+    }
+    for (const file of remote.files) {
+      if (!file.agentLedger) continue;
+      try {
+        const ledgerResult = importAgentLedger(file.agentLedger, {
+          deferInvalidTargets: true
+        });
+        if (ledgerResult.deferredProposalIds.length) {
+          degraded.push({
+            name: file.name,
+            path: file.path,
+            error: `Agent ledger 等待审批知识：${ledgerResult.deferredProposalIds.join(", ")}`,
+            observedAt: new Date().toISOString()
+          });
+        }
+      } catch (error) {
+        degraded.push({
+          name: file.name,
+          path: file.path,
+          error: `Agent ledger: ${error.message}`,
+          observedAt: new Date().toISOString()
+        });
+      }
+    }
+    for (const item of syncState.suppressedDeletes) {
+      degraded.push({
+        name: "approved-delete-suppressed",
+        path: OPERATIONS_DIR,
+        error: `已抑制有效审批知识删除：${item.entityId} (${item.operationId})`,
         observedAt: new Date().toISOString()
       });
     }
@@ -1637,10 +3767,22 @@ async function restoreBackup(name) {
     let priorVersions;
     let priorConflicts;
     let priorCounter;
+    let priorDeprecatedEntries;
+    let priorAgentLedger;
     try {
       priorOperations = rowsToOperations(prior.prepare("SELECT * FROM operations").all());
       priorVersions = prior.prepare("SELECT * FROM entity_versions").all();
       priorConflicts = prior.prepare("SELECT * FROM conflicts").all();
+      priorDeprecatedEntries = prior.prepare(
+        "SELECT * FROM entries WHERE status = 'deprecated'"
+      ).all().map(rowToEntry);
+      priorAgentLedger = {
+        version: 3,
+        runs: prior.prepare("SELECT * FROM agent_runs").all().map(rowToAgentRun),
+        proposals: prior.prepare("SELECT * FROM knowledge_proposals").all()
+          .map(rowToProposal),
+        audit: prior.prepare("SELECT * FROM audit_log").all().map(rowToAudit)
+      };
       priorCounter = Number(
         prior.prepare("SELECT value FROM sync_metadata WHERE key = 'logical_counter'").get()?.value || 0
       );
@@ -1655,10 +3797,14 @@ async function restoreBackup(name) {
     db = openDatabase();
     prepareStatements();
     bootstrapExistingData();
+    backfillRunSourcePins();
 
     const desiredEntries = new Map(
       statements.list.all().map(row => [row.id, rowToEntry(row)])
     );
+    for (const deprecated of priorDeprecatedEntries) {
+      desiredEntries.set(deprecated.id, deprecated);
+    }
     const desiredDeletes = new Set(
       statements.listTombstones.all().map(row => row.id)
     );
@@ -1714,6 +3860,7 @@ async function restoreBackup(name) {
         }
       }
     });
+    importAgentLedger(priorAgentLedger);
 
     pruneBackups();
     if (process.env.AI_KNOWLEDGE_TEST_RESTORE_FAULT === "after-local") {
@@ -1817,6 +3964,12 @@ function resolveConflict(id, input) {
         id: row.entity_id
       });
       if (duplicate && duplicate.id === dedupCanonicalId) {
+        if (activeApprovalForEntry(dedupCanonicalId)) {
+          throw apiError(
+            409,
+            "不能选择 incoming：重复内容的 canonical 知识仍被有效审批引用"
+          );
+        }
         const deletion = appendLocalState(
           "delete",
           dedupCanonicalId,
@@ -1825,6 +3978,12 @@ function resolveConflict(id, input) {
         );
         base = mergeVectors(base, deletion.vector);
       }
+    }
+    if (kind === "delete" && activeApprovalForEntry(row.entity_id)) {
+      throw apiError(
+        409,
+        "不能接受远端删除：该知识仍被有效审批引用；请先通过候选知识撤销审批"
+      );
     }
     if (entry) entry = { ...entry, id: row.entity_id };
     const operation = appendLocalState(kind, row.entity_id, entry, base);
@@ -2101,12 +4260,17 @@ function requestNeedsJson(method, pathname) {
   return (method === "POST" && [
     "/entries",
     "/import",
+    "/agent-runs",
     "/backups/restore",
     "/pairing/exchange",
     "/auth/challenge"
   ].includes(pathname)) ||
     (method === "PUT" && /^\/entries\/[^/]+$/.test(pathname)) ||
-    (method === "POST" && /^\/sync\/conflicts\/[^/]+\/resolve$/.test(pathname));
+    (method === "POST" && (
+      /^\/sync\/conflicts\/[^/]+\/resolve$/.test(pathname) ||
+      /^\/agent-runs\/[^/]+\/(?:start|complete|fail|cancel|proposals)$/.test(pathname) ||
+      /^\/knowledge-proposals\/[^/]+\/(?:approve|reject|undo)$/.test(pathname)
+    ));
 }
 
 const server = http.createServer(async (request, response) => {
@@ -2240,30 +4404,152 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, { entries: statements.list.all().map(rowToEntry) });
       return;
     }
+    if (request.method === "GET" && url.pathname === "/export") {
+      sendJson(response, 200, {
+        app: "AI Knowledge Inbox",
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        entries: statements.list.all().map(rowToEntry),
+        agentLedger: exportAgentLedger()
+      });
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/entries") {
+      rejectProtectedEntryFields(requestBody);
       sendJson(response, 201, { entry: createEntry(requestBody) });
       return;
     }
     if (request.method === "POST" && url.pathname === "/import") {
       if (!Array.isArray(requestBody.entries)) throw apiError(400, "entries 必须是数组");
+      const ledger = requestBody.agentLedger === undefined
+        ? null
+        : normalizeAgentLedger(requestBody.agentLedger);
+      validateImportedEntryAssertions(requestBody.entries, ledger);
       let imported = 0;
       let duplicates = 0;
-      for (const item of requestBody.entries) {
-        try {
-          createEntry(item, item);
-          imported += 1;
-        } catch (error) {
-          if (error.status === 409) duplicates += 1;
-          else throw error;
+      let ledgerImported = { runs: 0, proposals: 0, audit: 0 };
+      runTransaction(() => {
+        for (const item of requestBody.entries) {
+          try {
+            const existingRow = item && typeof item.id === "string"
+              ? statements.find.get(item.id)
+              : null;
+            if (existingRow) {
+              const existing = rowToEntry(existingRow);
+              const incoming = normalizeInput(item, item, "trusted");
+              const sharedCanonical = item.id.startsWith("agent-content-") &&
+                existing.content === incoming.content &&
+                existing.title === incoming.title;
+              if (!sharedCanonical && (
+                  existing.content !== incoming.content ||
+                  existing.title !== incoming.title ||
+                  existing.status !== incoming.status ||
+                  canonicalJson(existing.provenance) !== canonicalJson(incoming.provenance)
+                )) {
+                const conflict = apiError(409, `知识 ${item.id} 的不可变导入内容冲突`);
+                conflict.importConflict = true;
+                throw conflict;
+              }
+              duplicates += 1;
+              continue;
+            }
+            createEntry(item, item, {
+              trustedLifecycle: true,
+              inTransaction: true
+            });
+            imported += 1;
+          } catch (error) {
+            if (error.status === 409 && !error.importConflict) duplicates += 1;
+            else throw error;
+          }
         }
+        if (ledger) {
+          ledgerImported = importAgentLedger(ledger, {
+            normalized: true,
+            inTransaction: true
+          });
+        }
+      });
+      sendJson(response, 200, { imported, duplicates, agentLedger: ledgerImported });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/agent-runs") {
+      sendJson(response, 200, {
+        runs: statements.listAgentRuns.all().map(rowToAgentRun)
+      });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/agent-runs") {
+      sendJson(response, 201, { run: createAgentRun(requestBody) });
+      return;
+    }
+    const agentRunMatch = url.pathname.match(/^\/agent-runs\/([^/]+)$/);
+    const agentActionMatch = url.pathname.match(
+      /^\/agent-runs\/([^/]+)\/(start|complete|fail|cancel)$/
+    );
+    const runProposalsMatch = url.pathname.match(/^\/agent-runs\/([^/]+)\/proposals$/);
+    if (request.method === "GET" && agentRunMatch) {
+      const run = statements.findAgentRun.get(decodeURIComponent(agentRunMatch[1]));
+      if (!run) throw apiError(404, "Agent 运行不存在");
+      sendJson(response, 200, { run: rowToAgentRun(run) });
+      return;
+    }
+    if (request.method === "POST" && agentActionMatch) {
+      sendJson(response, 200, {
+        run: transitionAgentRun(
+          decodeURIComponent(agentActionMatch[1]),
+          agentActionMatch[2],
+          requestBody
+        )
+      });
+      return;
+    }
+    if (request.method === "GET" && runProposalsMatch) {
+      const runId = decodeURIComponent(runProposalsMatch[1]);
+      if (!statements.findAgentRun.get(runId)) throw apiError(404, "Agent 运行不存在");
+      sendJson(response, 200, {
+        proposals: statements.listProposals.all(runId).map(rowToProposal)
+      });
+      return;
+    }
+    if (request.method === "POST" && runProposalsMatch) {
+      sendJson(response, 201, {
+        proposal: createProposal(
+          decodeURIComponent(runProposalsMatch[1]),
+          requestBody
+        )
+      });
+      return;
+    }
+    const proposalActionMatch = url.pathname.match(
+      /^\/knowledge-proposals\/([^/]+)\/(approve|reject|undo)$/
+    );
+    if (request.method === "POST" && proposalActionMatch) {
+      const id = decodeURIComponent(proposalActionMatch[1]);
+      const action = proposalActionMatch[2];
+      const result = action === "approve"
+        ? approveProposal(id, requestBody)
+        : action === "reject"
+          ? { proposal: rejectProposal(id, requestBody) }
+          : undoProposal(id, requestBody);
+      sendJson(response, 200, result);
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/audit") {
+      const requestedLimit = Number(url.searchParams.get("limit") || 100);
+      if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 500) {
+        throw apiError(400, "limit 必须在 1 到 500 之间");
       }
-      sendJson(response, 200, { imported, duplicates });
+      sendJson(response, 200, {
+        events: statements.listAudit.all().slice(0, requestedLimit).map(rowToAudit)
+      });
       return;
     }
 
     const entryMatch = url.pathname.match(/^\/entries\/([^/]+)$/);
     const viewMatch = url.pathname.match(/^\/entries\/([^/]+)\/view$/);
     if (request.method === "PUT" && entryMatch) {
+      rejectProtectedEntryFields(requestBody);
       sendJson(response, 200, {
         entry: updateEntry(decodeURIComponent(entryMatch[1]), requestBody)
       });
@@ -2287,7 +4573,10 @@ const server = http.createServer(async (request, response) => {
       recordDiagnosticError("request", error);
       console.error(error);
     }
-    sendJson(response, status, { error: error.message || "服务内部错误" });
+    sendJson(response, status, {
+      error: error.message || "服务内部错误",
+      ...(error.code ? { code: error.code } : {})
+    });
   } finally {
     if (releaseGate) releaseGate();
   }
