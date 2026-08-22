@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $installRoot = Join-Path $env:LOCALAPPDATA "AIKnowledgeInbox"
 $appDir = Join-Path $installRoot "app"
 $extensionDir = Join-Path $installRoot "extension"
-$startupFile = Join-Path ([Environment]::GetFolderPath("Startup")) "AI Knowledge Companion.cmd"
+$startupDirectory = [Environment]::GetFolderPath("Startup")
 $startMenuDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\AI Knowledge Inbox"
 
 foreach ($pidName in @("companion.pid", "server.pid")) {
@@ -17,7 +17,8 @@ foreach ($pidName in @("companion.pid", "server.pid")) {
 }
 Start-Sleep -Milliseconds 500
 
-Remove-Item -LiteralPath $startupFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $startupDirectory "AI Knowledge Companion.cmd") -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $startupDirectory "AI Knowledge Companion.lnk") -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $startMenuDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $appDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $extensionDir -Recurse -Force -ErrorAction SilentlyContinue

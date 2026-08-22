@@ -111,6 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         process.arguments = [server.path]
         var environment = ProcessInfo.processInfo.environment
         environment["AI_KNOWLEDGE_DATA_DIR"] = dataDirectory.path
+        environment["AI_KNOWLEDGE_APP_VERSION"] =
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        environment["AI_KNOWLEDGE_BUILD_VERSION"] =
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         if let oneDrive = findOneDriveFolder() {
             environment["AI_KNOWLEDGE_ONEDRIVE"] = oneDrive.path
         }

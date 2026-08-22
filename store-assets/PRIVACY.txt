@@ -1,0 +1,5 @@
+AI Knowledge Inbox stores knowledge locally in the browser or optional desktop SQLite database.
+It has no ads, analytics, telemetry, hosted backend, or remote code. OneDrive sync uses the
+user's own local OneDrive folder. A manually initiated update check requests only public release
+metadata from GitHub; it sends no knowledge, identifier, or usage data. See the full policy:
+https://github.com/lindaf0617-hub/ai-knowledge-inbox/blob/main/PRIVACY.md

@@ -16,6 +16,13 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Validate extension package
+        run: node scripts/package-validator.js extension store-assets/PERMISSIONS.md
+      - name: Run integration tests
+        run: node --test tests/*.test.js
       - name: Reclaim runner disk space
         run: |
           sudo rm -rf \
@@ -32,4 +39,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos-package
-          path: dist/*macOS-*-unsigned.dmg
+          path: |
+            dist/*macOS-*-unsigned.dmg
+            dist/artifact-manifest-macos.json

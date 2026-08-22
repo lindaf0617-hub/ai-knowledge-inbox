@@ -17,12 +17,13 @@ AI Knowledge Inbox is designed to keep knowledge under the user's control.
 - Requests from normal web origins are rejected.
 - Sensitive routes require a random per-install bearer token stored in the companion data directory. The token is provisioned to an extension only after the user enters a short-lived, one-time desktop pairing code, and is then held in `chrome.storage.local`.
 - Before the extension or companion sends that token or a knowledge payload, it verifies a nonce-bound HMAC proof from the service. A process merely impersonating port `43127` cannot produce the proof; verification failure blocks the request and never triggers browser-local mutation fallback. The challenge exposes no token or knowledge.
-- Unauthenticated health checks reveal only service availability. Authenticated diagnostics contain counts and redacted paths, never knowledge titles, content, source URLs, operation payloads, tokens, or provider secrets.
+- Unauthenticated health checks reveal only service availability plus non-sensitive app/protocol versions. Authenticated diagnostics contain build details, counts, and redacted paths, never knowledge titles, content, source URLs, operation payloads, tokens, or provider secrets.
 - The project does not operate a hosted backend or telemetry endpoint.
 - Browser built-in AI is invoked locally when the browser exposes Prompt API.
 - If the user selects Ollama in Ask, only the question and selected, length-bounded source content are sent to the local Ollama API at `http://127.0.0.1:11434`; cloud endpoints are not configurable.
 - The selected AI provider and Ollama model name are stored in `chrome.storage.local`. These are non-secret preferences.
 - Azure and API-key providers are not implemented. They require a future secure secret-storage and permission design.
+- Only when the user clicks **Check updates**, the extension requests public release metadata from GitHub. It sends no knowledge, identifier, or usage data and never downloads or executes an update.
 
 ## Deletion
 

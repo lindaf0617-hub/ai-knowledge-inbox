@@ -4,7 +4,8 @@ AI Knowledge Inbox __VERSION__
 安装
 ----
 1. 解压整个 ZIP。
-2. 双击“安装 Beta.cmd”。
+__INSTALL_STEP__
+__SIGNING_NOTE__
 3. 安装器会打开浏览器扩展页，并把扩展目录复制到剪贴板。
 4. 开启开发者模式，选择“加载已解压的扩展”。
 5. 在桌面 AI 中复制内容，按 Ctrl + ; 保存。

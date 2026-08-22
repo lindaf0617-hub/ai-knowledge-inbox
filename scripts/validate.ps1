@@ -54,9 +54,13 @@ if ($manifest.manifest_version -ne 3) {
 foreach ($required in @(
     "extension\ask.html",
     "extension\i18n.js",
+    "extension\release-info.js",
     "extension\citations.js",
     "macos\Sources\AIKnowledgeCompanion\main.swift",
     "scripts\build-macos.sh",
+    "scripts\write-release-info.js",
+    "scripts\verify-release-artifacts.js",
+    "macos\node-entitlements.plist",
     "HACKATHON.md",
     "PROJECT_RECORD.md",
     "AGENT_ROADMAP.md"
@@ -65,4 +69,13 @@ foreach ($required in @(
         throw "Required release file is missing: $required"
     }
 }
+$prereleaseCheck = & (Join-Path $repoRoot "scripts\build-release.ps1") `
+    -Version "$($manifest.version)-beta.1+validation" `
+    -ValidateVersionOnly
+if ($LASTEXITCODE -ne 0 -or $prereleaseCheck -notmatch "matches manifest version core") {
+    throw "Prerelease artifact version validation failed."
+}
+& (Join-Path $repoRoot "scripts\validate-extension-package.ps1") `
+    -ExtensionPath (Join-Path $repoRoot "extension") `
+    -PermissionsDocument (Join-Path $repoRoot "store-assets\PERMISSIONS.md")
 Write-Output "Validation passed for version $($manifest.version)."

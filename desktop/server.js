@@ -44,6 +44,8 @@ const BACKUP_RETENTION = { daily: 7, manual: 10, "pre-restore": 5 };
 const MIXED_VERSION_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const APP_VERSION = process.env.AI_KNOWLEDGE_APP_VERSION || "1.6.0";
+const BUILD_VERSION = process.env.AI_KNOWLEDGE_BUILD_VERSION || "development";
+const PROTOCOL_VERSION = "1.0.0";
 const PAIRING_TTL_MS = Math.max(
   100,
   Number(process.env.AI_KNOWLEDGE_PAIRING_TTL_MS || 5 * 60 * 1000)
@@ -1979,7 +1981,12 @@ function recordDiagnosticError(area, error) {
 function diagnostics() {
   const status = syncStatus();
   return {
-    app: { name: "AI Knowledge Inbox", version: APP_VERSION },
+    app: {
+      name: "AI Knowledge Inbox",
+      version: APP_VERSION,
+      build: BUILD_VERSION
+    },
+    protocolVersion: PROTOCOL_VERSION,
     schemaVersion,
     platform: {
       os: process.platform,
@@ -2120,6 +2127,8 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, 200, {
       status: "ok",
       app: "AI Knowledge Inbox",
+      version: APP_VERSION,
+      protocolVersion: PROTOCOL_VERSION,
       authRequired: true
     });
     return;
@@ -2166,6 +2175,12 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/health") {
       sendJson(response, 200, {
         status: "ok",
+        app: {
+          name: "AI Knowledge Inbox",
+          version: APP_VERSION,
+          build: BUILD_VERSION
+        },
+        protocolVersion: PROTOCOL_VERSION,
         storage: "sqlite",
         database: DB_PATH,
         cloud: syncStatus()

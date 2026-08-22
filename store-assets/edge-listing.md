@@ -21,3 +21,10 @@ The extension can run independently with browser-local storage or connect to the
 - `scripting`: convert the user-selected page fragment to Markdown.
 - `storage`: retain knowledge when the desktop companion is unavailable.
 - `http://127.0.0.1:43127/*`: connect only to the optional local desktop service.
+- `http://127.0.0.1:11434/*`: connect only to local Ollama when the user selects it.
+- `https://api.github.com/*`: fetch public release metadata only after the user clicks Check updates; no knowledge or identifier is sent.
+
+## Privacy
+
+No ads, analytics, telemetry, hosted backend, or remote code. Knowledge remains in browser-local
+storage or the optional local desktop database. The manual update check sends no user data.

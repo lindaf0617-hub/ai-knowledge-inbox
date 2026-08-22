@@ -8,6 +8,11 @@ $serverPath = Join-Path $scriptRoot "server.js"
 $dataDir = Join-Path $env:LOCALAPPDATA "AIKnowledgeInbox"
 $pidFile = Join-Path $dataDir "companion.pid"
 $authTokenPath = Join-Path $dataDir "auth-token"
+$packageVersion = "__VERSION__"
+if (-not $packageVersion.StartsWith("__")) {
+    $env:AI_KNOWLEDGE_APP_VERSION = $packageVersion
+    $env:AI_KNOWLEDGE_BUILD_VERSION = "windows-portable"
+}
 $script:authToken = ""
 $script:serviceProcess = $null
 $script:captureOpen = $false

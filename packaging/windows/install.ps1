@@ -3,12 +3,16 @@ $ErrorActionPreference = "Stop"
 $packageRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sourceDesktop = Join-Path $packageRoot "desktop"
 $sourceExtension = Join-Path $packageRoot "extension"
+$payloadManifestPath = Join-Path $packageRoot "payload-manifest.json"
+$expectedPayloadManifestSha256 = "__PAYLOAD_MANIFEST_SHA256__"
+$signedPackage = [bool]::Parse("__SIGNED_PACKAGE__")
 $testRoot = $env:AI_KNOWLEDGE_TEST_ROOT
 $installRoot = if ($testRoot) { Join-Path $testRoot "AIKnowledgeInbox" } else { Join-Path $env:LOCALAPPDATA "AIKnowledgeInbox" }
 $appDir = Join-Path $installRoot "app"
 $extensionDir = Join-Path $installRoot "extension"
 $startupDir = if ($testRoot) { Join-Path $testRoot "Startup" } else { [Environment]::GetFolderPath("Startup") }
-$startupFile = Join-Path $startupDir "AI Knowledge Companion.cmd"
+$startupName = if ($signedPackage) { "AI Knowledge Companion.lnk" } else { "AI Knowledge Companion.cmd" }
+$startupFile = Join-Path $startupDir $startupName
 $startMenuDir = if ($testRoot) { Join-Path $testRoot "StartMenu" } else { Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\AI Knowledge Inbox" }
 
 function Assert-Source([string]$path, [string]$label) {
@@ -17,9 +21,56 @@ function Assert-Source([string]$path, [string]$label) {
     }
 }
 
+function Assert-PayloadIntegrity {
+        Assert-Source $payloadManifestPath "Payload manifest"
+        $manifestHash = (Get-FileHash -LiteralPath $payloadManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($manifestHash -ne $expectedPayloadManifestSha256) {
+            throw "Payload manifest integrity verification failed."
+        }
+        $manifest = [IO.File]::ReadAllText($payloadManifestPath, [Text.Encoding]::UTF8) |
+            ConvertFrom-Json
+        if ($manifest.schemaVersion -ne 1 -or -not $manifest.files) {
+            throw "Payload manifest format is invalid."
+        }
+        $expected = @{}
+        foreach ($entry in $manifest.files) {
+            $relative = [string]$entry.path
+            if (-not $relative -or [IO.Path]::IsPathRooted($relative) -or
+                $relative.Split("/") -contains ".." -or $expected.ContainsKey($relative)) {
+                throw "Payload manifest contains an unsafe or duplicate path."
+            }
+            $expected[$relative] = $entry
+        }
+        $actualFiles = @(
+            Get-ChildItem -LiteralPath $sourceDesktop -Recurse -File
+            Get-ChildItem -LiteralPath $sourceExtension -Recurse -File
+            Get-Item -LiteralPath (Join-Path $packageRoot "uninstall.ps1")
+        )
+        $actualPaths = @{}
+        foreach ($file in $actualFiles) {
+            $relative = $file.FullName.Substring($packageRoot.Length).TrimStart("\").Replace("\", "/")
+            if (-not $expected.ContainsKey($relative)) {
+                throw "Unexpected payload file: $relative"
+            }
+            $entry = $expected[$relative]
+            if ($file.Length -ne [long]$entry.bytes) {
+                throw "Payload size verification failed: $relative"
+            }
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -ne [string]$entry.sha256) {
+                throw "Payload hash verification failed: $relative"
+            }
+            $actualPaths[$relative] = $true
+        }
+        if ($actualPaths.Count -ne $expected.Count) {
+            throw "Payload is missing one or more manifest files."
+    }
+}
+
 Assert-Source $sourceDesktop "Desktop app"
 Assert-Source $sourceExtension "Browser extension"
 Assert-Source (Join-Path $sourceDesktop "node.exe") "Bundled Node runtime"
+Assert-PayloadIntegrity
 
 New-Item -ItemType Directory -Force -Path $installRoot, $appDir, $extensionDir, $startupDir, $startMenuDir | Out-Null
 
@@ -40,16 +91,25 @@ Copy-Item -Path (Join-Path $sourceExtension "*") -Destination $extensionDir -Rec
 Copy-Item -LiteralPath (Join-Path $packageRoot "uninstall.ps1") -Destination $appDir -Force
 
 $companionScript = Join-Path $appDir "desktop-companion.ps1"
-$startupContent = @"
+$shell = New-Object -ComObject WScript.Shell
+$executionPolicy = if ($signedPackage) { "AllSigned" } else { "Bypass" }
+if ($signedPackage) {
+    $startupShortcut = $shell.CreateShortcut($startupFile)
+    $startupShortcut.TargetPath = "powershell.exe"
+    $startupShortcut.Arguments = "-NoProfile -ExecutionPolicy AllSigned -STA -WindowStyle Hidden -File `"$companionScript`""
+    $startupShortcut.WorkingDirectory = $appDir
+    $startupShortcut.Save()
+} else {
+    $startupContent = @"
 @echo off
 start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "$companionScript"
 "@
-Set-Content -LiteralPath $startupFile -Value $startupContent -Encoding ASCII
+    Set-Content -LiteralPath $startupFile -Value $startupContent -Encoding ASCII
+}
 
-$shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut((Join-Path $startMenuDir "AI Knowledge Companion.lnk"))
 $shortcut.TargetPath = "powershell.exe"
-$shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File `"$companionScript`""
+$shortcut.Arguments = "-NoProfile -ExecutionPolicy $executionPolicy -STA -WindowStyle Hidden -File `"$companionScript`""
 $shortcut.WorkingDirectory = $appDir
 $shortcut.Description = "Capture copied AI content into the local knowledge inbox"
 $shortcut.Save()
@@ -58,14 +118,14 @@ $installedUninstaller = Join-Path $appDir "uninstall.ps1"
 $uninstallTarget = Join-Path $startMenuDir "Uninstall AI Knowledge Inbox.lnk"
 $uninstallShortcut = $shell.CreateShortcut($uninstallTarget)
 $uninstallShortcut.TargetPath = "powershell.exe"
-$uninstallShortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -STA -File `"$installedUninstaller`""
+$uninstallShortcut.Arguments = "-NoProfile -ExecutionPolicy $executionPolicy -STA -File `"$installedUninstaller`""
 $uninstallShortcut.WorkingDirectory = $appDir
 $uninstallShortcut.Save()
 
 if (-not $testRoot) {
     Start-Process powershell.exe -ArgumentList @(
         "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
+        "-ExecutionPolicy", $executionPolicy,
         "-STA",
         "-WindowStyle", "Hidden",
         "-File", "`"$companionScript`""

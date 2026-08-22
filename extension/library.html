@@ -54,6 +54,15 @@
       font-size: 12px;
     }
     .sync-line.error { color: var(--cp-danger); }
+    .version-line {
+      margin-top: 7px;
+      color: var(--cp-text-muted);
+      font-size: 12px;
+    }
+    .version-line.warning { color: var(--cp-danger); font-weight: 700; }
+    .release-link { color: var(--cp-link); }
+    .channel-label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+    .channel-label input { width: auto; }
     .header-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .language-picker {
       min-height: 40px;
@@ -546,6 +555,8 @@
           <span class="backend-status" id="backendStatus">正在检测存储…</span>
         </p>
         <div class="sync-line" id="syncStatus">正在检测 OneDrive 同步…</div>
+        <div class="version-line" id="versionStatus">正在检测版本和身份状态…</div>
+        <div class="version-line" id="updateResult" role="status"></div>
       </div>
       <div class="header-actions">
         <button class="button primary" id="askButton" type="button">Ask 知识库</button>
@@ -558,6 +569,11 @@
           <option value="tech">配色 2 · 科技</option>
         </select>
         <button class="button" id="syncButton" type="button">立即同步</button>
+        <button class="button" id="checkUpdates" type="button">检查更新</button>
+        <label class="channel-label">
+          <input id="prereleaseChannel" type="checkbox">
+          包含预发布版
+        </label>
         <button class="button" id="exportMarkdownButton" type="button">导出全部 Markdown</button>
         <button class="button" id="exportButton" type="button">导出备份</button>
         <button class="button" id="importButton" type="button">导入备份</button>
@@ -651,6 +667,8 @@
   </dialog>
   <div id="toast" role="status"></div>
 
+  <script src="release-info.js"></script>
+  <script src="update.js"></script>
   <script src="storage.js"></script>
   <script src="markdown.js"></script>
   <script src="browser-ai.js"></script>

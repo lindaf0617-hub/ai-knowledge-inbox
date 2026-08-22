@@ -31,12 +31,14 @@ It provides:
 
 Download the [v1.6.0 Beta](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/tag/v1.6.0):
 
-- Windows: `AI-Knowledge-Inbox-<version>-Windows.zip`
+- Windows Beta: `AI-Knowledge-Inbox-<version>-Windows-unsigned.zip`
 - Apple Silicon: `AI-Knowledge-Inbox-<version>-macOS-arm64-unsigned.dmg`
 - Intel Mac: `AI-Knowledge-Inbox-<version>-macOS-x64-unsigned.dmg`
 - Browser extension only: `AI-Knowledge-Inbox-Extension-<version>.zip`
 
-The macOS Beta is not notarized yet. Control-click the app and choose **Open** on first launch.
+Current Windows and macOS Beta desktop packages are unsigned. On macOS, Control-click the app and
+choose **Open** on first launch. Future stable desktop packages require signed Windows and signed,
+notarized macOS artifacts.
 
 ### Pair the browser extension
 

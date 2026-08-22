@@ -34,6 +34,9 @@ function createStore({ entries = [], token = "", fetchImpl }) {
     fetch: fetchImpl,
     setTimeout,
     chrome: {
+      runtime: {
+        getManifest: () => ({ version: "1.6.0" })
+      },
       storage: {
         local: {
           get: async defaults => ({ ...defaults, ...local }),
@@ -157,6 +160,32 @@ test("minimal unauthenticated health response prompts pairing for a new install"
   };
   const { store } = createStore({ fetchImpl });
   assert.equal(await store.getBackendStatus(), "pairing");
+});
+
+test("version status combines authenticated service, protocol, and sync state", async () => {
+  const fetchImpl = async (url, options = {}) => {
+    if (url.endsWith("/auth/challenge")) return challengeResponse("paired-token", options);
+    if (url.endsWith("/health")) {
+      return new Response(JSON.stringify({
+        status: "ok",
+        app: { name: "AI Knowledge Inbox", version: "2.0.0", build: "test-build" },
+        protocolVersion: "2.0.0",
+        storage: "sqlite"
+      }), { status: 200 });
+    }
+    if (url.endsWith("/sync/status")) {
+      return new Response(JSON.stringify({ enabled: true, status: "synced" }), { status: 200 });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+  const { store } = createStore({ token: "paired-token", fetchImpl });
+  const status = await store.getVersionStatus();
+  assert.equal(status.extensionVersion, "1.6.0");
+  assert.equal(status.desktopVersion, "2.0.0");
+  assert.equal(status.desktopBuild, "test-build");
+  assert.equal(status.authState, "authenticated");
+  assert.equal(status.sync.status, "synced");
+  assert.equal(status.protocolMismatch, true);
 });
 
 test("successful pairing stores the token before authenticated migration", async () => {

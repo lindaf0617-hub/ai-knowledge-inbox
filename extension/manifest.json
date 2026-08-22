@@ -11,7 +11,8 @@
   },
   "host_permissions": [
     "http://127.0.0.1:43127/*",
-    "http://127.0.0.1:11434/*"
+    "http://127.0.0.1:11434/*",
+    "https://api.github.com/*"
   ],
   "permissions": [
     "activeTab",

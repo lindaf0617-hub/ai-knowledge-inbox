@@ -741,11 +741,16 @@ test("bearer authentication protects sensitive routes while health stays minimal
   assert.deepEqual(health.body, {
     status: "ok",
     app: "AI Knowledge Inbox",
+    version: "1.6.0",
+    protocolVersion: "1.0.0",
     authRequired: true
   });
   assert.equal(JSON.stringify(health.body).includes(service.token), false);
   assert.equal(service.errors.value.includes(service.token), false);
   const authenticatedHealth = await request("/health");
+  assert.equal(authenticatedHealth.body.app.version, "1.6.0");
+  assert.equal(authenticatedHealth.body.app.build, "development");
+  assert.equal(authenticatedHealth.body.protocolVersion, "1.0.0");
   const sync = await request("/sync/status");
   assert.equal(JSON.stringify([authenticatedHealth.body, sync.body]).includes(service.token), false);
 });

@@ -5,8 +5,15 @@ const KnowledgeStore = (() => {
   const TOKEN_KEY = "desktopApiToken";
   const AUTH_DOMAIN = "AIKnowledgeInbox.LocalAPI.AuthChallenge";
   const AUTH_PROTOCOL = 1;
+  const SERVICE_PROTOCOL_VERSION = "1.0.0";
   const PROOF_CACHE_MS = 15_000;
   let proofCache = { token: "", expiresAt: 0 };
+  let serviceInfo = {
+    version: "",
+    build: "",
+    protocolVersion: "",
+    authenticated: false
+  };
 
   function isValidEntry(entry) {
     return entry &&
@@ -101,6 +108,16 @@ const KnowledgeStore = (() => {
     return error;
   }
 
+  function rememberServiceInfo(data, authenticated) {
+    const app = data && data.app;
+    serviceInfo = {
+      version: typeof app === "object" ? String(app.version || "") : String(data.version || ""),
+      build: typeof app === "object" ? String(app.build || "") : "",
+      protocolVersion: String(data && data.protocolVersion || ""),
+      authenticated
+    };
+  }
+
   async function fetchWithTimeout(url, options = {}) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1800);
@@ -179,10 +196,13 @@ const KnowledgeStore = (() => {
     const token = stored[TOKEN_KEY];
     if (token) return token;
     try {
-      await fetchWithTimeout(`${API_BASE}/health`);
+      const response = await fetchWithTimeout(`${API_BASE}/health`);
+      const data = await response.json().catch(() => ({}));
+      rememberServiceInfo(data, false);
     } catch (error) {
       throw unavailableError(error);
     }
+
     const error = new Error("请先配对桌面伴侣");
     error.status = 401;
     error.pairingRequired = true;
@@ -212,6 +232,7 @@ const KnowledgeStore = (() => {
     }
 
     const data = await response.json().catch(() => ({}));
+    if (path === "/health" && response.ok) rememberServiceInfo(data, Boolean(token));
     if (response.ok && data.authRequired === true) {
       const error = new Error("请先配对桌面伴侣");
       error.status = 401;
@@ -434,10 +455,12 @@ const KnowledgeStore = (() => {
         backend = "security";
         return backend;
       }
+
       if (error.pairingRequired) {
         backend = "pairing";
         return backend;
       }
+
       if (!error.serverUnavailable) throw error;
       backend = "local";
     }
@@ -471,6 +494,48 @@ const KnowledgeStore = (() => {
         lastError: "桌面知识服务未运行"
       };
     }
+  }
+
+  async function getVersionStatus() {
+    const mode = await getBackendStatus();
+    const stored = await chrome.storage.local.get({ [TOKEN_KEY]: "" });
+    let sync = {
+      enabled: false,
+      status: mode === "server" ? "unknown" : "offline",
+      lastSyncAt: "",
+      lastError: ""
+    };
+    if (mode === "server") {
+      try {
+        sync = await getCloudStatus();
+      } catch (error) {
+        sync = { ...sync, status: "error", lastError: error.message };
+      }
+    }
+    const extensionVersion = chrome.runtime?.getManifest
+      ? chrome.runtime.getManifest().version
+      : "";
+    const desktopMajor = Number.parseInt(serviceInfo.protocolVersion.split(".")[0], 10);
+    const extensionMajor = Number.parseInt(SERVICE_PROTOCOL_VERSION.split(".")[0], 10);
+    return {
+      extensionVersion,
+      extensionProtocolVersion: SERVICE_PROTOCOL_VERSION,
+      desktopVersion: serviceInfo.version,
+      desktopBuild: serviceInfo.build,
+      desktopProtocolVersion: serviceInfo.protocolVersion,
+      backend: mode,
+      authState: mode === "server"
+        ? "authenticated"
+        : mode === "security"
+          ? "security-error"
+        : mode === "pairing"
+          ? "pairing-required"
+          : stored[TOKEN_KEY] ? "paired-offline" : "unpaired",
+      sync,
+      protocolMismatch: Number.isInteger(desktopMajor) &&
+        Number.isInteger(extensionMajor) &&
+        desktopMajor !== extensionMajor
+    };
   }
 
   async function syncCloud() {
@@ -515,6 +580,7 @@ const KnowledgeStore = (() => {
     getBackendStatus,
     getCloudStatus,
     getEntries,
+    getVersionStatus,
     importEntries,
     isValidEntry,
     normalizeTags,

@@ -15,6 +15,10 @@ const elements = {
   search: document.getElementById("search"),
   backendStatus: document.getElementById("backendStatus"),
   syncStatus: document.getElementById("syncStatus"),
+  versionStatus: document.getElementById("versionStatus"),
+  updateResult: document.getElementById("updateResult"),
+  checkUpdates: document.getElementById("checkUpdates"),
+  prereleaseChannel: document.getElementById("prereleaseChannel"),
   skinPicker: document.getElementById("skinPicker"),
   searchMode: document.getElementById("searchMode"),
   projectFilter: document.getElementById("projectFilter"),
@@ -248,6 +252,118 @@ async function refreshSyncStatus() {
     formatSyncStatus({ enabled: false, status: "error", lastError: error.message });
   }
 }
+
+function statusLabel(value, english) {
+  const labels = english
+    ? {
+        authenticated: "authenticated",
+        "security-error": "identity error",
+        "pairing-required": "pairing required",
+        "paired-offline": "paired/offline",
+        unpaired: "unpaired",
+        offline: "offline",
+        syncing: "syncing",
+        error: "error",
+        synced: "synced",
+        disabled: "disabled"
+      }
+    : {
+        authenticated: "已认证",
+        "security-error": "身份错误",
+        "pairing-required": "需要配对",
+        "paired-offline": "已配对/离线",
+        unpaired: "未配对",
+        offline: "离线",
+        syncing: "同步中",
+        error: "错误",
+        synced: "已同步",
+        disabled: "未启用"
+      };
+  return labels[value] || (english ? "ready" : "就绪");
+}
+
+function currentReleaseVersion() {
+  const identity = String(globalThis.__AI_KNOWLEDGE_RELEASE_VERSION || "").trim();
+  return UpdateCore.parseSemver(identity)
+    ? identity.replace(/^v/, "")
+    : chrome.runtime.getManifest().version;
+}
+
+async function refreshVersionStatus() {
+  try {
+    const info = await KnowledgeStore.getVersionStatus();
+    const english = I18n.getLanguage() === "en";
+    const syncState = info.sync.enabled ? info.sync.status : (
+      info.sync.status === "offline" ? "offline" : "disabled"
+    );
+    const releaseVersion = currentReleaseVersion();
+    elements.versionStatus.textContent = english
+      ? `Extension v${releaseVersion} · Desktop ${
+          info.desktopVersion ? `v${info.desktopVersion}` : "not detected"
+        } · Auth: ${statusLabel(info.authState, true)} · Sync: ${statusLabel(syncState, true)}`
+      : `扩展 v${releaseVersion} · 桌面 ${
+          info.desktopVersion ? `v${info.desktopVersion}` : "未检测到"
+        } · 身份：${statusLabel(info.authState, false)} · 同步：${statusLabel(syncState, false)}`;
+    elements.versionStatus.classList.toggle("warning", info.protocolMismatch);
+    if (info.protocolMismatch) {
+      elements.versionStatus.textContent += english
+        ? ` · Warning: protocol major mismatch (${info.extensionProtocolVersion}/${info.desktopProtocolVersion})`
+        : ` · 警告：协议主版本不兼容（${info.extensionProtocolVersion}/${info.desktopProtocolVersion}）`;
+    }
+  } catch (error) {
+    elements.versionStatus.textContent = error.message;
+    elements.versionStatus.classList.add("warning");
+  }
+}
+
+async function loadUpdateChannel() {
+  const saved = await chrome.storage.local.get({ updateChannel: "stable" });
+  elements.prereleaseChannel.checked = saved.updateChannel === "prerelease";
+}
+
+elements.prereleaseChannel.addEventListener("change", async () => {
+  await chrome.storage.local.set({
+    updateChannel: elements.prereleaseChannel.checked ? "prerelease" : "stable"
+  });
+  elements.updateResult.textContent = "";
+});
+
+elements.checkUpdates.addEventListener("click", async () => {
+  elements.checkUpdates.disabled = true;
+  elements.updateResult.textContent = I18n.getLanguage() === "en"
+    ? "Checking GitHub releases…"
+    : "正在检查 GitHub Releases…";
+  try {
+    const result = await UpdateCore.checkForUpdates(
+      currentReleaseVersion(),
+      elements.prereleaseChannel.checked ? "prerelease" : "stable"
+    );
+    elements.updateResult.replaceChildren();
+    if (result.status === "available") {
+      elements.updateResult.append(document.createTextNode(
+        I18n.getLanguage() === "en" ? `Version ${result.release.version} is available: ` :
+          `发现新版本 ${result.release.version}：`
+      ));
+      const link = document.createElement("a");
+      link.className = "release-link";
+      link.href = result.release.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = I18n.getLanguage() === "en" ? "Open release" : "打开发布页";
+      elements.updateResult.append(link);
+    } else {
+      elements.updateResult.textContent = I18n.getLanguage() === "en"
+        ? "You are on the latest release for this channel."
+        : "当前已是此渠道的最新版本。";
+    }
+  } catch {
+    elements.updateResult.textContent = I18n.getLanguage() === "en"
+      ? "Update check failed. Try again later."
+      : "检查更新失败，请稍后重试。";
+  } finally {
+    elements.checkUpdates.disabled = false;
+  }
+});
 
 function updateFilters() {
   const selectedProject = state.project;
@@ -648,6 +764,7 @@ async function refreshEntries() {
     state.entries = await KnowledgeStore.getEntries();
     render();
     await refreshSyncStatus();
+    await refreshVersionStatus();
   } catch (error) {
     showToast(error.message || "读取知识库失败");
   }
@@ -659,9 +776,11 @@ document.addEventListener("visibilitychange", () => {
 });
 
 refreshEntries();
+loadUpdateChannel();
 setInterval(refreshSyncStatus, 30_000);
 document.addEventListener("languagechange", () => {
   render();
   refreshSyncStatus();
+  refreshVersionStatus();
   I18n.apply();
 });

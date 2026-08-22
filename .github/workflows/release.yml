@@ -9,7 +9,39 @@ permissions:
   contents: write
 
 jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Validate tag and derive channel
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          core="$(node extension/update.js --core "$version")"
+          channel="$(node extension/update.js --channel "$version")"
+          manifest_version="$(node -p "require('./extension/manifest.json').version")"
+          [[ "$core" == "$manifest_version" ]] || {
+            echo "Tag core $core does not match manifest $manifest_version" >&2
+            exit 1
+          }
+          case "$channel" in
+            stable) prerelease=false ;;
+            prerelease) prerelease=true ;;
+            *) echo "Invalid release channel: $channel" >&2; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
   windows:
+    needs: metadata
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,23 +54,96 @@ jobs:
       - name: Run integration tests
         shell: powershell
         run: node --test tests\*.test.js
-      - name: Build artifacts
+      - name: Build unsigned prerelease
+        if: needs.metadata.outputs.prerelease == 'true'
+        shell: powershell
+        run: .\scripts\build-release.ps1 -Version '${{ needs.metadata.outputs.version }}'
+      - name: Verify unsigned prerelease manifest
+        if: needs.metadata.outputs.prerelease == 'true'
         shell: powershell
         run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart("v")
-          .\scripts\build-release.ps1 -Version $version
+          $manifest = Get-Content -Raw dist\artifact-manifest-windows.json | ConvertFrom-Json
+          if ($manifest.version -ne '${{ needs.metadata.outputs.version }}' -or $manifest.signed) {
+            throw "Prerelease Windows artifact must match the tag and be unsigned."
+          }
+          if (-not $manifest.unsigned -or -not $manifest.payloadVerified -or
+              $null -ne $manifest.signedEntrypoint) {
+            throw "Prerelease Windows trust metadata is invalid."
+          }
+          if (-not ($manifest.artifacts.file -match '-Windows-unsigned\.zip$')) {
+            throw "Prerelease Windows desktop artifact is not labeled unsigned."
+          }
+      - name: Require and materialize Windows signing secrets
+        if: needs.metadata.outputs.prerelease == 'false'
+        shell: powershell
+        env:
+          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PFX_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:WINDOWS_PFX_PASSWORD)) {
+            throw "Stable release requires WINDOWS_CERTIFICATE_PFX_BASE64 and WINDOWS_PFX_PASSWORD."
+          }
+          Write-Output "::add-mask::$env:WINDOWS_CERTIFICATE_PFX_BASE64"
+          Write-Output "::add-mask::$env:WINDOWS_PFX_PASSWORD"
+          try {
+            $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64)
+          } catch {
+            throw "WINDOWS_CERTIFICATE_PFX_BASE64 is not valid base64."
+          }
+          [IO.File]::WriteAllBytes((Join-Path $env:RUNNER_TEMP "windows-signing.pfx"), $bytes)
+      - name: Build signed stable Windows package
+        if: needs.metadata.outputs.prerelease == 'false'
+        shell: powershell
+        env:
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          .\scripts\build-release.ps1 `
+            -Version '${{ needs.metadata.outputs.version }}' `
+            -Sign `
+            -PfxPath (Join-Path $env:RUNNER_TEMP "windows-signing.pfx") `
+            -PfxPassword $env:WINDOWS_PFX_PASSWORD
+      - name: Verify signed stable manifest
+        if: needs.metadata.outputs.prerelease == 'false'
+        shell: powershell
+        run: |
+          $manifest = Get-Content -Raw dist\artifact-manifest-windows.json | ConvertFrom-Json
+          if ($manifest.version -ne '${{ needs.metadata.outputs.version }}' -or -not $manifest.signed) {
+            throw "Stable Windows artifact must match the tag and be signed."
+          }
+          if ($manifest.unsigned -or -not $manifest.payloadVerified -or
+              $manifest.signedEntrypoint -ne "install.ps1") {
+            throw "Stable Windows trust metadata is invalid."
+          }
+          if (-not ($manifest.artifacts.file -match '-Windows-signed\.zip$')) {
+            throw "Stable Windows desktop artifact is not labeled signed."
+          }
+      - name: Remove Windows signing material
+        if: always() && needs.metadata.outputs.prerelease == 'false'
+        shell: powershell
+        run: Remove-Item (Join-Path $env:RUNNER_TEMP "windows-signing.pfx") -Force -ErrorAction SilentlyContinue
       - uses: actions/upload-artifact@v4
         with:
           name: windows-release
           path: |
-            dist/AI-Knowledge-Inbox-*-Windows.zip
+            dist/AI-Knowledge-Inbox-*-Windows-*.zip
             dist/AI-Knowledge-Inbox-Extension-*.zip
+            dist/AI-Knowledge-Inbox-Store-*.zip
+            dist/artifact-manifest-windows.json
             dist/SHA256SUMS.txt
 
   macos:
+    needs: metadata
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Validate browser store package
+        run: node scripts/package-validator.js extension store-assets/PERMISSIONS.md
+      - name: Run integration tests
+        run: node --test tests/*.test.js
       - name: Reclaim runner disk space
         run: |
           sudo rm -rf \
@@ -48,35 +153,116 @@ jobs:
             /Applications/Xcode_*.app/Contents/Developer/Platforms/AppleTVSimulator.platform \
             /Applications/Xcode_*.app/Contents/Developer/Platforms/WatchOS.platform \
             /Applications/Xcode_*.app/Contents/Developer/Platforms/WatchSimulator.platform
-      - name: Build unsigned macOS package
+      - name: Build unsigned prerelease
+        if: needs.metadata.outputs.prerelease == 'true'
+        run: bash scripts/build-macos.sh '${{ needs.metadata.outputs.version }}'
+      - name: Verify unsigned prerelease manifest
+        if: needs.metadata.outputs.prerelease == 'true'
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          bash scripts/build-macos.sh "$version"
+          node - <<'NODE'
+          const manifest = require("./dist/artifact-manifest-macos.json");
+          if (manifest.version !== "${{ needs.metadata.outputs.version }}" ||
+              manifest.signed || manifest.notarized ||
+              !manifest.artifacts.every(item => item.file.endsWith("-unsigned.dmg"))) {
+            throw new Error("Prerelease macOS artifacts must match the tag and be unsigned.");
+          }
+          NODE
+      - name: Build signed and notarized stable macOS package
+        if: needs.metadata.outputs.prerelease == 'false'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_CERTIFICATE_P12_BASE64 APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGN_IDENTITY APPLE_NOTARY_KEY_BASE64 APPLE_NOTARY_KEY_ID \
+            APPLE_NOTARY_ISSUER_ID; do
+            [[ -n "${!name:-}" ]] || {
+              echo "Stable release signing secret is incomplete: $name" >&2
+              exit 1
+            }
+            echo "::add-mask::${!name}"
+          done
+          keychain="$RUNNER_TEMP/release-signing.keychain-db"
+          certificate="$RUNNER_TEMP/apple-certificate.p12"
+          notary_key="$RUNNER_TEMP/AuthKey.p8"
+          keychain_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$keychain_password"
+          cleanup() {
+            security delete-keychain "$keychain" >/dev/null 2>&1 || true
+            rm -f "$certificate" "$notary_key"
+          }
+          trap cleanup EXIT
+          printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | /usr/bin/base64 -D > "$certificate"
+          printf '%s' "$APPLE_NOTARY_KEY_BASE64" | /usr/bin/base64 -D > "$notary_key"
+          chmod 600 "$certificate" "$notary_key"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          APPLE_NOTARIZE=1 APPLE_NOTARY_KEY="$notary_key" \
+            bash scripts/build-macos.sh '${{ needs.metadata.outputs.version }}'
+      - name: Verify signed and notarized stable manifest
+        if: needs.metadata.outputs.prerelease == 'false'
+        run: |
+          node - <<'NODE'
+          const manifest = require("./dist/artifact-manifest-macos.json");
+          if (manifest.version !== "${{ needs.metadata.outputs.version }}" ||
+              !manifest.signed || !manifest.notarized ||
+              !manifest.artifacts.every(item => item.file.endsWith("-signed-notarized.dmg"))) {
+            throw new Error("Stable macOS artifacts must be signed and notarized.");
+          }
+          NODE
       - uses: actions/upload-artifact@v4
         with:
           name: macos-release
-          path: dist/*macOS-*-unsigned.dmg
+          path: |
+            dist/*macOS-*.dmg
+            dist/artifact-manifest-macos.json
 
   publish:
-    needs: [windows, macos]
+    needs: [metadata, windows, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Add macOS checksum
+      - name: Add macOS checksums
         run: |
           cd dist
-          sha256sum *macOS-*-unsigned.dmg >> SHA256SUMS.txt
-      - name: Create GitHub pre-release
+          sha256sum *macOS-*.dmg >> SHA256SUMS.txt
+          sha256sum artifact-manifest-macos.json >> SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+      - name: Verify release artifact policy
+        run: |
+          node scripts/verify-release-artifacts.js \
+            dist \
+            '${{ needs.metadata.outputs.version }}' \
+            '${{ needs.metadata.outputs.prerelease }}'
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: true
+          prerelease: ${{ needs.metadata.outputs.prerelease }}
           body_path: RELEASE_NOTES.md
           files: |
-            dist/AI-Knowledge-Inbox-*-Windows.zip
-            dist/AI-Knowledge-Inbox-*-macOS-*-unsigned.dmg
+            dist/AI-Knowledge-Inbox-*-Windows-*.zip
+            dist/AI-Knowledge-Inbox-*-macOS-*.dmg
             dist/AI-Knowledge-Inbox-Extension-*.zip
+            dist/AI-Knowledge-Inbox-Store-*.zip
+            dist/artifact-manifest-windows.json
+            dist/artifact-manifest-macos.json
             dist/SHA256SUMS.txt

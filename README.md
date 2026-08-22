@@ -20,6 +20,7 @@ AI Knowledge Inbox 解决一个简单问题：**AI 每天生成很多有价值�
 - 因果操作日志同步、显式冲突处理与保留 7 份的每日 SQLite 备份
 - 中文 / English 界面
 - Markdown 和 JSON 导出
+- 手动检查 GitHub Releases 更新（可选预发布渠道，不自动下载或执行）
 
 ---
 
@@ -33,14 +34,17 @@ AI Knowledge Inbox 解决一个简单问题：**AI 每天生成很多有价值�
 
 从 [v1.6.0 Beta](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/tag/v1.6.0) 下载：
 
-- Windows：`AI-Knowledge-Inbox-<version>-Windows.zip`
+- Windows Beta：`AI-Knowledge-Inbox-<version>-Windows-unsigned.zip`
 - Apple Silicon：`AI-Knowledge-Inbox-<version>-macOS-arm64-unsigned.dmg`
 - Intel Mac：`AI-Knowledge-Inbox-<version>-macOS-x64-unsigned.dmg`
 - 仅浏览器扩展：`AI-Knowledge-Inbox-Extension-<version>.zip`
+- 浏览器商店提交：`AI-Knowledge-Inbox-Store-<version>.zip`
 
-Windows 解压后运行 `安装 Beta.cmd`。macOS 首个 Beta 尚未签名，需按 Release 说明允许打开。
+当前 Windows/macOS Beta 均未签名。Windows 解压后运行 `安装 Beta.cmd`；macOS 需按
+Release 说明允许打开。未来稳定版只发布已签名 Windows 和已签名、公证的 macOS 包。
 
 浏览器扩展暂以 Developer mode 加载；商店版本准备中。
+发布包签名、商店提交和回滚步骤见 [PUBLISHING.md](PUBLISHING.md)。
 
 ### 配对浏览器扩展
 
