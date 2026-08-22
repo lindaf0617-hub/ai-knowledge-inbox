@@ -54,6 +54,15 @@ cp "$DIST/macos-build/node-v${NODE_VERSION}-darwin-arm64/LICENSE" "$RESOURCES/NO
 sed -e "s/__VERSION__/${VERSION}/g" -e "s/__BUILD__/1/g" \
   "$ROOT/macos/Info.plist" > "$CONTENTS/Info.plist"
 
+# Reclaim downloaded archives and extracted runtime trees before hdiutil
+# creates its temporary filesystem image.
+rm -rf \
+  "$DIST/macos-build/node-v${NODE_VERSION}-darwin-arm64" \
+  "$DIST/macos-build/node-v${NODE_VERSION}-darwin-x64" \
+  "$DIST/macos-build/node-v${NODE_VERSION}-darwin-arm64.tar.gz" \
+  "$DIST/macos-build/node-v${NODE_VERSION}-darwin-x64.tar.gz" \
+  "$DIST/macos-build/SHASUMS256.txt"
+
 codesign --force --deep --sign - "$APP"
 
 DMG="$DIST/AI-Knowledge-Inbox-${VERSION}-macOS-unsigned.dmg"
