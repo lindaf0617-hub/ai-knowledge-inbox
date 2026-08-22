@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Knowledge Inbox</title>
+  <script>
+    (() => {
+      const param = new URLSearchParams(window.location.search).get("scoutTheme");
+      const theme =
+        param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --cp-bg: #f7f4ef;
+      --cp-bg-elevated: #fcfbf8;
+      --cp-surface: #ffffff;
+      --cp-surface-soft: #f5f5f5;
+      --cp-border: #dedede;
+      --cp-border-strong: #919191;
+      --cp-text: #242424;
+      --cp-text-muted: #5c5c5c;
+      --cp-text-soft: #6f6f6f;
+      --cp-accent: #b11f4b;
+      --cp-accent-hover: #9a1a41;
+      --cp-accent-soft: rgba(177, 31, 75, 0.08);
+      --cp-accent-fg: #ffffff;
+      --cp-success: #16a34a;
+      --cp-danger: #dc2626;
+      --cp-warning: #f59e0b;
+      --cp-link: #0078d4;
+      --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.12);
+      --cp-overlay: rgba(255, 255, 255, 0.8);
+      --cp-panel: rgba(255, 255, 255, 0.86);
+      --cp-panel-strong: rgba(255, 255, 255, 0.96);
+      --cp-sheen: rgba(255, 255, 255, 0.55);
+      --cp-highlight: rgba(177, 31, 75, 0.12);
+    }
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --cp-bg: #3d3b3a;
+      --cp-bg-elevated: #343231;
+      --cp-surface: #292929;
+      --cp-surface-soft: #2e2e2e;
+      --cp-border: #474747;
+      --cp-border-strong: #5f5f5f;
+      --cp-text: #dedede;
+      --cp-text-muted: #919191;
+      --cp-text-soft: #b0b0b0;
+      --cp-accent: #fd8ea1;
+      --cp-accent-hover: #fb7b91;
+      --cp-accent-soft: rgba(253, 142, 161, 0.14);
+      --cp-accent-fg: #1a1a1a;
+      --cp-success: #4ade80;
+      --cp-danger: #f87171;
+      --cp-warning: #fbbf24;
+      --cp-link: #4da6ff;
+      --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+      --cp-overlay: rgba(41, 41, 41, 0.88);
+      --cp-panel: rgba(41, 41, 41, 0.72);
+      --cp-panel-strong: rgba(41, 41, 41, 0.96);
+      --cp-sheen: rgba(255, 255, 255, 0.04);
+      --cp-highlight: rgba(253, 142, 161, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--cp-bg);
+      color: var(--cp-text);
+      font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    a { color: inherit; text-decoration: none; }
+    .wrap { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 0;
+    }
+    .brand { font-weight: 800; letter-spacing: 0.02em; }
+    .nav-links { display: flex; gap: 16px; color: var(--cp-text-muted); }
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 42px;
+      align-items: center;
+      padding: 76px 0 88px;
+    }
+    .eyebrow {
+      color: var(--cp-link);
+      font-family: Consolas, "Courier New", Courier, monospace;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+    }
+    h1 { margin: 14px 0 18px; font-size: clamp(42px, 7vw, 76px); line-height: 0.98; }
+    .lead { max-width: 680px; color: var(--cp-text-soft); font-size: 19px; line-height: 1.7; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+    .button {
+      padding: 12px 18px;
+      border: 1px solid var(--cp-border);
+      background: var(--cp-surface);
+      font-weight: 700;
+    }
+    .button.primary { border-color: var(--cp-accent); background: var(--cp-accent); color: var(--cp-accent-fg); }
+    .terminal {
+      padding: 22px;
+      border: 1px solid var(--cp-link);
+      border-top: 5px solid var(--cp-accent);
+      background: var(--cp-surface);
+      box-shadow: 12px 12px 0 var(--cp-highlight);
+      font-family: Consolas, "Courier New", Courier, monospace;
+      clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
+    }
+    .terminal p { margin: 10px 0; color: var(--cp-text-muted); }
+    .terminal strong { color: var(--cp-success); }
+    .section { padding: 64px 0; border-top: 1px solid var(--cp-border); }
+    .section h2 { margin: 0 0 24px; font-size: 32px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .card {
+      padding: 22px;
+      border: 1px solid var(--cp-border);
+      border-top: 4px solid var(--cp-link);
+      background: var(--cp-surface);
+    }
+    .card:nth-child(2n) { border-top-color: var(--cp-success); }
+    .card:nth-child(3n) { border-top-color: var(--cp-accent); }
+    .card h3 { margin: 0 0 10px; }
+    .card p { margin: 0; color: var(--cp-text-muted); line-height: 1.6; }
+    footer { padding: 36px 0; color: var(--cp-text-muted); border-top: 1px solid var(--cp-border); }
+    @media (max-width: 760px) {
+      .hero, .grid { grid-template-columns: 1fr; }
+      .hero { padding-top: 40px; }
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="wrap">
+    <div class="brand">AI KNOWLEDGE INBOX</div>
+    <div class="nav-links"><a href="#features">功能</a><a href="#privacy">隐私</a><a href="https://github.com/lindaf0617-hub/ai-knowledge-inbox">GitHub</a></div>
+  </nav>
+  <main>
+    <section class="hero wrap">
+      <div>
+        <div class="eyebrow">PRIVATE KNOWLEDGE OS // WINDOWS + BROWSER</div>
+        <h1>让每次 AI 对话<br>成为长期资产</h1>
+        <p class="lead">一键保存 Copilot、ChatGPT、Claude 和网页内容，在本地搜索、整理、引用，并通过自己的 OneDrive 跨设备同步。</p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/latest">下载最新版</a>
+          <a class="button" href="https://github.com/lindaf0617-hub/ai-knowledge-inbox">查看源码</a>
+        </div>
+      </div>
+      <div class="terminal">
+        <p>&gt; capture --source copilot</p>
+        <p><strong>saved</strong> 1 knowledge item</p>
+        <p>&gt; ask "整合 Agent 安全方案"</p>
+        <p><strong>retrieved</strong> K1, K2, K3</p>
+        <p><strong>answer</strong> generated with citations</p>
+        <p>&gt; sync --target onedrive</p>
+        <p><strong>synced</strong> private knowledge</p>
+      </div>
+    </section>
+    <section class="section" id="features">
+      <div class="wrap">
+        <h2>从采集到再利用</h2>
+        <div class="grid">
+          <article class="card"><h3>桌面一键采集</h3><p>复制内容后按 Ctrl + ;，从 Windows AI 应用快速保存。</p></article>
+          <article class="card"><h3>网页选区保存</h3><p>Edge/Chrome 右键采集，保留标题、链接、列表与代码块。</p></article>
+          <article class="card"><h3>Ask 知识库</h3><p>本地检索相关知识，由浏览器内置 AI 生成带引用的回答。</p></article>
+          <article class="card"><h3>本地优先</h3><p>SQLite 主库、本机语义向量和无托管后端设计。</p></article>
+          <article class="card"><h3>OneDrive 同步</h3><p>使用自己的 OneDrive，在设备间合并更新与删除。</p></article>
+          <article class="card"><h3>开放格式</h3><p>导出 Markdown 和 JSON，可迁移到 Obsidian 等工具。</p></article>
+        </div>
+      </div>
+    </section>
+    <section class="section" id="privacy">
+      <div class="wrap"><h2>你的知识，由你控制</h2><p class="lead">没有托管数据库、广告或遥测。桌面服务只监听本机地址，普通网页不能访问。公开提交问题时，请勿附带私密知识正文。</p></div>
+    </section>
+  </main>
+  <footer><div class="wrap">AI Knowledge Inbox · MIT License</div></footer>
+</body>
+</html>

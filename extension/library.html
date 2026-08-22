@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 知识收件箱</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    .app {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 36px 0 64px;
+    }
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 22px;
+      padding: 24px;
+      border: 1px solid var(--cp-border);
+      border-left: 6px solid var(--cp-accent);
+      border-radius: 16px;
+      background: var(--cp-surface);
+      box-shadow: 0 0 2px var(--cp-border), 0 1px 2px var(--cp-border);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(26px, 4vw, 38px);
+      letter-spacing: -0.02em;
+    }
+    .subtitle { margin: 0; color: var(--cp-text-muted); }
+    .backend-status {
+      display: inline-block;
+      margin-left: 8px;
+      padding: 2px 7px;
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      font-size: 12px;
+    }
+    .backend-status.server {
+      border-color: var(--cp-success);
+      color: var(--cp-success);
+    }
+    .backend-status.local {
+      border-color: var(--cp-warning);
+      color: var(--cp-warning);
+    }
+    .sync-line {
+      margin-top: 7px;
+      color: var(--cp-text-muted);
+      font-size: 12px;
+    }
+    .sync-line.error { color: var(--cp-danger); }
+    .header-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .insights {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .metric {
+      position: relative;
+      overflow: hidden;
+      padding: 16px;
+      border: 1px solid var(--cp-border);
+      border-top: 4px solid var(--cp-accent);
+      border-radius: 16px;
+      background: var(--cp-surface);
+      box-shadow: 0 0 2px var(--cp-border), 0 1px 2px var(--cp-border);
+    }
+    .metric:nth-child(2) { border-top-color: var(--cp-success); }
+    .metric:nth-child(3) { border-top-color: var(--cp-warning); }
+    .metric:nth-child(4) { border-top-color: var(--cp-link); }
+    .metric strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 24px;
+      line-height: 1.2;
+      color: var(--cp-accent);
+    }
+    .metric:nth-child(2) strong { color: var(--cp-success); }
+    .metric:nth-child(3) strong { color: var(--cp-warning); }
+    .metric:nth-child(4) strong { color: var(--cp-link); }
+    .metric span {
+      color: var(--cp-text-muted);
+      font-size: 12px;
+    }
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 130px 160px 140px 140px auto;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    #search, .filter {
+      height: 46px;
+      padding: 10px 14px;
+      border-width: 2px;
+      background: var(--cp-surface);
+    }
+    #search { border-color: var(--cp-accent); }
+    #count {
+      display: flex;
+      align-items: center;
+      color: var(--cp-text-muted);
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .card {
+      display: flex;
+      flex-direction: column;
+      min-height: 200px;
+      padding: 20px;
+      border: 1px solid var(--cp-border);
+      border-top: 4px solid var(--cp-accent);
+      border-radius: 16px;
+      background: var(--cp-surface);
+      box-shadow: 0 0 2px var(--cp-border), 0 1px 2px var(--cp-border);
+      transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+    }
+    .card:hover {
+      transform: translateY(-3px);
+      border-color: var(--cp-accent);
+      box-shadow: var(--cp-shadow);
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .taxonomy {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0 0 12px;
+    }
+    .chip {
+      padding: 3px 8px;
+      border-radius: 0.625rem;
+      background: var(--cp-accent-soft);
+      color: var(--cp-accent);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .chip.project {
+      border: 1px solid var(--cp-link);
+      background: var(--cp-surface);
+      color: var(--cp-link);
+    }
+    .preview {
+      display: -webkit-box;
+      margin: 0 0 18px;
+      overflow: hidden;
+      color: var(--cp-text-soft);
+      line-height: 1.6;
+      white-space: pre-wrap;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 5;
+    }
+    .card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: auto;
+    }
+    .text-button {
+      border: 0;
+      padding: 5px 7px;
+      border-radius: 0.625rem;
+      background: transparent;
+      color: var(--cp-danger);
+      font-weight: 600;
+    }
+    .text-button:hover { background: var(--cp-accent-soft); }
+    .preview-button { color: var(--cp-link); }
+    .empty {
+      grid-column: 1 / -1;
+      padding: 80px 24px;
+      border: 1px dashed var(--cp-border-strong);
+      border-radius: 16px;
+      text-align: center;
+      color: var(--cp-text-muted);
+    }
+    .empty strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--cp-text);
+      font-size: 18px;
+    }
+    dialog {
+      width: min(720px, calc(100% - 24px));
+      max-height: calc(100vh - 40px);
+      padding: 0;
+      overflow: auto;
+      border: 1px solid var(--cp-border);
+      border-radius: 16px;
+      background: var(--cp-surface);
+      color: var(--cp-text);
+      box-shadow: var(--cp-shadow);
+    }
+    dialog::backdrop { background: var(--cp-overlay); }
+    .dialog-head {
+      position: sticky;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--cp-border);
+      background: var(--cp-panel-strong);
+    }
+    .dialog-head h2 { margin: 0; font-size: 20px; }
+    .dialog-body { padding: 22px; }
+    #editContent { min-height: 260px; }
+    #editSummary { min-height: 100px; }
+    .ai-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .ai-row .hint { margin: 0; }
+    .summary-box {
+      margin: 16px 0;
+      padding: 14px 16px;
+      border-left: 3px solid var(--cp-accent);
+      background: var(--cp-accent-soft);
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }
+    .markdown-body {
+      line-height: 1.7;
+      overflow-wrap: anywhere;
+    }
+    .markdown-body h1, .markdown-body h2, .markdown-body h3,
+    .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+      margin: 1.25em 0 0.55em;
+      line-height: 1.3;
+    }
+    .markdown-body p { white-space: pre-wrap; }
+    .markdown-body code {
+      padding: 2px 5px;
+      border-radius: 0.3rem;
+      background: var(--cp-surface-soft);
+      font-family: Consolas, "Courier New", Courier, monospace;
+    }
+    .markdown-body pre {
+      overflow: auto;
+      padding: 16px;
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      background: var(--cp-bg-elevated);
+    }
+    .markdown-body pre code { padding: 0; background: transparent; }
+    .markdown-body blockquote {
+      margin: 16px 0;
+      padding: 4px 16px;
+      border-left: 3px solid var(--cp-accent);
+      color: var(--cp-text-soft);
+      white-space: pre-wrap;
+      background: var(--cp-accent-soft);
+    }
+    .markdown-body a { color: var(--cp-link); }
+    .related {
+      margin-top: 28px;
+      padding-top: 20px;
+      border-top: 1px solid var(--cp-border);
+    }
+    .related h3 {
+      margin: 0 0 12px;
+      font-size: 15px;
+    }
+    .related-list {
+      display: grid;
+      gap: 8px;
+    }
+    .related-item {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      background: var(--cp-surface-soft);
+      color: var(--cp-text);
+      text-align: left;
+    }
+    .related-item:hover { border-color: var(--cp-border-strong); }
+    .related-item:hover {
+      border-color: var(--cp-accent);
+      background: var(--cp-accent-soft);
+    }
+    .related-item strong, .related-item span { display: block; }
+    .related-item span {
+      margin-top: 3px;
+      color: var(--cp-text-muted);
+      font-size: 12px;
+    }
+    .icon-button {
+      width: 36px;
+      height: 36px;
+      border: 0;
+      border-radius: 0.625rem;
+      background: var(--cp-surface-soft);
+      color: var(--cp-text);
+      font-size: 22px;
+    }
+    #toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      padding: 12px 16px;
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      background: var(--cp-panel-strong);
+      box-shadow: var(--cp-shadow);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: 160ms ease;
+      pointer-events: none;
+    }
+    #toast.show { opacity: 1; transform: translateY(0); }
+
+    html[data-skin="tech"] body {
+      background: var(--cp-bg-elevated);
+      border-top: 4px solid var(--cp-accent);
+    }
+    html[data-skin="tech"] .app {
+      position: relative;
+      width: min(1240px, calc(100% - 40px));
+    }
+    html[data-skin="tech"] .app::before,
+    html[data-skin="tech"] .app::after {
+      position: fixed;
+      z-index: -1;
+      top: 4px;
+      bottom: 0;
+      width: 1px;
+      background: var(--cp-border);
+      content: "";
+    }
+    html[data-skin="tech"] .app::before { left: max(12px, calc((100vw - 1240px) / 2 - 16px)); }
+    html[data-skin="tech"] .app::after { right: max(12px, calc((100vw - 1240px) / 2 - 16px)); }
+    html[data-skin="tech"] header {
+      position: relative;
+      padding: 28px;
+      border: 1px solid var(--cp-link);
+      border-left: 6px solid var(--cp-accent);
+      border-bottom: 3px solid var(--cp-link);
+      border-radius: 0;
+      background: var(--cp-surface);
+      box-shadow: none;
+      clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
+    }
+    html[data-skin="tech"] header::after {
+      position: absolute;
+      right: 24px;
+      bottom: 0;
+      width: 96px;
+      height: 3px;
+      background: var(--cp-success);
+      content: "";
+    }
+    html[data-skin="tech"] .header-copy::before {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--cp-link);
+      content: "KNOWLEDGE SYSTEM // ONLINE";
+      font-family: Consolas, "Courier New", Courier, monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+    }
+    html[data-skin="tech"] h1 {
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    html[data-skin="tech"] .backend-status {
+      border-radius: 0;
+      background: var(--cp-surface-soft);
+      font-family: Consolas, "Courier New", Courier, monospace;
+      font-weight: 700;
+    }
+    html[data-skin="tech"] .header-actions {
+      max-width: 470px;
+      justify-content: flex-end;
+    }
+    html[data-skin="tech"] .button,
+    html[data-skin="tech"] .skin-picker {
+      border-radius: 0;
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    }
+    html[data-skin="tech"] .skin-picker {
+      min-height: 40px;
+      padding: 8px 12px;
+      border: 1px solid var(--cp-accent);
+      background: var(--cp-accent-soft);
+      color: var(--cp-accent);
+      font-weight: 700;
+    }
+    html[data-skin="tech"] .insights { gap: 10px; }
+    html[data-skin="tech"] .metric {
+      min-height: 112px;
+      padding: 18px;
+      border-radius: 0;
+      background: var(--cp-surface);
+      box-shadow: none;
+      clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+    }
+    html[data-skin="tech"] .metric::after {
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      width: 22px;
+      height: 4px;
+      background: var(--cp-accent);
+      content: "";
+    }
+    html[data-skin="tech"] .metric:nth-child(2)::after { background: var(--cp-success); }
+    html[data-skin="tech"] .metric:nth-child(3)::after { background: var(--cp-warning); }
+    html[data-skin="tech"] .metric:nth-child(4)::after { background: var(--cp-link); }
+    html[data-skin="tech"] .metric strong {
+      font-family: Consolas, "Courier New", Courier, monospace;
+      font-size: 30px;
+      letter-spacing: 0.04em;
+    }
+    html[data-skin="tech"] .metric span {
+      font-family: Consolas, "Courier New", Courier, monospace;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    html[data-skin="tech"] .toolbar {
+      padding: 12px;
+      border: 1px solid var(--cp-border);
+      border-left: 4px solid var(--cp-success);
+      background: var(--cp-surface-soft);
+    }
+    html[data-skin="tech"] #search,
+    html[data-skin="tech"] .filter {
+      border-radius: 0;
+      box-shadow: none;
+      font-family: Consolas, "Courier New", Courier, monospace;
+    }
+    html[data-skin="tech"] #count {
+      font-family: Consolas, "Courier New", Courier, monospace;
+    }
+    html[data-skin="tech"] .grid { gap: 12px; }
+    html[data-skin="tech"] .card {
+      position: relative;
+      min-height: 230px;
+      border-radius: 0;
+      border-top-color: var(--cp-link);
+      background: var(--cp-surface);
+      box-shadow: none;
+      clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+    }
+    html[data-skin="tech"] .card:nth-child(3n + 2) { border-top-color: var(--cp-success); }
+    html[data-skin="tech"] .card:nth-child(3n) { border-top-color: var(--cp-accent); }
+    html[data-skin="tech"] .card::before {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      width: 7px;
+      height: 7px;
+      border: 1px solid var(--cp-link);
+      background: var(--cp-surface);
+      content: "";
+    }
+    html[data-skin="tech"] .card:hover {
+      transform: translateY(-4px);
+      border-color: var(--cp-link);
+      box-shadow: 8px 8px 0 var(--cp-highlight);
+    }
+    html[data-skin="tech"] .card h2 {
+      padding-right: 20px;
+      font-family: "Segoe UI Semibold", "Segoe UI", Aptos, Calibri, sans-serif;
+    }
+    html[data-skin="tech"] .chip {
+      border: 1px solid var(--cp-accent);
+      border-radius: 0;
+      background: var(--cp-surface);
+      font-family: Consolas, "Courier New", Courier, monospace;
+      letter-spacing: 0.03em;
+    }
+    html[data-skin="tech"] .chip.project { border-color: var(--cp-link); }
+    html[data-skin="tech"] .meta,
+    html[data-skin="tech"] .sync-line {
+      font-family: Consolas, "Courier New", Courier, monospace;
+    }
+    html[data-skin="tech"] dialog {
+      border: 1px solid var(--cp-link);
+      border-radius: 0;
+      clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+    }
+    html[data-skin="tech"] .dialog-head {
+      border-bottom: 3px solid var(--cp-accent);
+      background: var(--cp-surface);
+    }
+    html[data-skin="tech"] .summary-box,
+    html[data-skin="tech"] .related-item,
+    html[data-skin="tech"] .markdown-body pre {
+      border-radius: 0;
+    }
+    @media (max-width: 820px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .toolbar { grid-template-columns: 1fr 1fr; }
+      .insights { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 580px) {
+      header { flex-direction: column; }
+      .toolbar, .grid { grid-template-columns: 1fr; }
+      .insights { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div class="header-copy">
+        <h1>AI 知识收件箱</h1>
+        <p class="subtitle">
+          来自浏览器和桌面伴侣的知识，都保存在这里。
+          <span class="backend-status" id="backendStatus">正在检测存储…</span>
+        </p>
+        <div class="sync-line" id="syncStatus">正在检测 OneDrive 同步…</div>
+      </div>
+      <div class="header-actions">
+        <button class="button primary" id="askButton" type="button">Ask 知识库</button>
+        <select class="skin-picker" id="skinPicker" aria-label="知识库配色">
+          <option value="classic">配色 1 · 鲜艳</option>
+          <option value="tech">配色 2 · 科技</option>
+        </select>
+        <button class="button" id="syncButton" type="button">立即同步</button>
+        <button class="button" id="exportMarkdownButton" type="button">导出全部 Markdown</button>
+        <button class="button" id="exportButton" type="button">导出备份</button>
+        <button class="button" id="importButton" type="button">导入备份</button>
+        <input class="hidden" id="fileInput" type="file" accept="application/json,.json">
+      </div>
+    </header>
+    <section class="insights" aria-label="使用概览">
+      <div class="metric"><strong id="totalMetric">0</strong><span>全部知识</span></div>
+      <div class="metric"><strong id="weekMetric">0</strong><span>近 7 天新增</span></div>
+      <div class="metric"><strong id="viewMetric">0</strong><span>累计预览</span></div>
+      <div class="metric"><strong id="sourceMetric">—</strong><span>主要来源</span></div>
+    </section>
+    <section class="toolbar">
+      <input id="search" type="search" placeholder="输入多个关键词，按相关性搜索…" autocomplete="off">
+      <select class="filter" id="searchMode" aria-label="搜索方式">
+        <option value="keyword">关键词</option>
+        <option value="semantic">语义向量</option>
+      </select>
+      <select class="filter" id="projectFilter" aria-label="按项目筛选">
+        <option value="">全部项目</option>
+      </select>
+      <select class="filter" id="tagFilter" aria-label="按标签筛选">
+        <option value="">全部标签</option>
+      </select>
+      <select class="filter" id="sortOrder" aria-label="排序方式">
+        <option value="newest">最新保存</option>
+        <option value="mostViewed">最多预览</option>
+        <option value="recentlyViewed">最近预览</option>
+      </select>
+      <div id="count"></div>
+    </section>
+    <section class="grid" id="grid" aria-live="polite"></section>
+  </main>
+
+  <dialog id="editDialog">
+    <div class="dialog-head">
+      <h2>编辑知识</h2>
+      <button class="icon-button" id="closeDialog" type="button" aria-label="关闭">×</button>
+    </div>
+    <form class="dialog-body" id="editForm">
+      <div class="meta" id="editMeta"></div>
+      <div class="ai-row">
+        <p class="hint">浏览器内置 AI 在设备本地生成，不上传到外部服务。</p>
+        <button class="button" id="organizeButton" type="button">AI 智能整理</button>
+      </div>
+      <div class="field">
+        <label for="editTitle">标题</label>
+        <input id="editTitle" maxlength="120" required>
+      </div>
+      <div class="field">
+        <label for="editContent">内容</label>
+        <textarea id="editContent" required></textarea>
+      </div>
+      <div class="field">
+        <label for="editSummary">摘要</label>
+        <textarea id="editSummary" placeholder="可手动填写，或使用浏览器内置 AI 生成"></textarea>
+      </div>
+      <div class="field">
+        <label for="editSource">来源</label>
+        <input id="editSource" type="url" placeholder="https://…">
+      </div>
+      <div class="field">
+        <label for="editProject">项目</label>
+        <input id="editProject" maxlength="60" placeholder="例如：知识库 MVP">
+      </div>
+      <div class="field">
+        <label for="editTags">标签</label>
+        <input id="editTags" maxlength="200" placeholder="产品, Agent, 灵感">
+        <p class="hint">多个标签用逗号分隔。</p>
+      </div>
+      <div class="actions">
+        <button class="button" id="cancelEdit" type="button">取消</button>
+        <button class="button primary" type="submit">保存修改</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="previewDialog">
+    <div class="dialog-head">
+      <h2 id="previewTitle"></h2>
+      <button class="icon-button" id="closePreview" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="dialog-body">
+      <div class="meta" id="previewMeta"></div>
+      <div class="summary-box hidden" id="previewSummary"></div>
+      <article class="markdown-body" id="markdownPreview"></article>
+      <section class="related hidden" id="relatedSection">
+        <h3>相关知识</h3>
+        <div class="related-list" id="relatedList"></div>
+      </section>
+    </div>
+  </dialog>
+  <div id="toast" role="status"></div>
+
+  <script src="storage.js"></script>
+  <script src="markdown.js"></script>
+  <script src="browser-ai.js"></script>
+  <script src="semantic.js"></script>
+  <script src="library.js"></script>
+</body>
+</html>

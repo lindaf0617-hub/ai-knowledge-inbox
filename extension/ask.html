@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ask AI 知识库</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    body { min-height: 100vh; }
+    .app {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 64px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+      padding: 22px 24px;
+      border: 1px solid var(--cp-border);
+      border-left: 6px solid var(--cp-accent);
+      border-radius: 16px;
+      background: var(--cp-surface);
+    }
+    .eyebrow {
+      margin: 0 0 7px;
+      color: var(--cp-link);
+      font-family: Consolas, "Courier New", Courier, monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+    }
+    h1 { margin: 0 0 6px; font-size: clamp(25px, 4vw, 36px); }
+    .subtitle { margin: 0; color: var(--cp-text-muted); }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 10px;
+      color: var(--cp-text-muted);
+      font-size: 12px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--cp-warning);
+    }
+    .status.available .status-dot { background: var(--cp-success); }
+    .status.unavailable .status-dot { background: var(--cp-danger); }
+    .ask-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.8fr) minmax(280px, 0.8fr);
+      gap: 16px;
+    }
+    .panel {
+      border: 1px solid var(--cp-border);
+      border-radius: 16px;
+      background: var(--cp-surface);
+      box-shadow: 0 0 2px var(--cp-border), 0 1px 2px var(--cp-border);
+    }
+    .question-panel { padding: 22px; }
+    .question-box {
+      min-height: 126px;
+      padding: 14px;
+      resize: vertical;
+      line-height: 1.6;
+    }
+    .question-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .mode-select {
+      width: 180px;
+      height: 42px;
+      padding: 8px 10px;
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      background: var(--cp-surface);
+      color: var(--cp-text);
+    }
+    .answer-panel {
+      min-height: 330px;
+      margin-top: 16px;
+      padding: 24px;
+    }
+    .answer-empty {
+      display: grid;
+      min-height: 280px;
+      place-items: center;
+      color: var(--cp-text-muted);
+      text-align: center;
+    }
+    .answer-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--cp-border);
+    }
+    .answer-head h2 { margin: 0; font-size: 18px; }
+    .markdown-body { line-height: 1.75; overflow-wrap: anywhere; }
+    .markdown-body p { white-space: pre-wrap; }
+    .markdown-body code {
+      padding: 2px 5px;
+      border-radius: 0.3rem;
+      background: var(--cp-surface-soft);
+      font-family: Consolas, "Courier New", Courier, monospace;
+    }
+    .markdown-body pre {
+      overflow: auto;
+      padding: 14px;
+      border: 1px solid var(--cp-border);
+      background: var(--cp-bg-elevated);
+    }
+    .markdown-body blockquote {
+      margin: 16px 0;
+      padding: 8px 14px;
+      border-left: 3px solid var(--cp-accent);
+      background: var(--cp-accent-soft);
+    }
+    .sources-panel {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+      overflow: hidden;
+    }
+    .sources-head {
+      padding: 18px;
+      border-bottom: 1px solid var(--cp-border);
+    }
+    .sources-head h2 { margin: 0 0 4px; font-size: 16px; }
+    .sources-head p { margin: 0; color: var(--cp-text-muted); font-size: 12px; }
+    .source-list { display: grid; gap: 8px; padding: 12px; }
+    .source-card {
+      padding: 12px;
+      border: 1px solid var(--cp-border);
+      border-left: 4px solid var(--cp-link);
+      border-radius: 0.625rem;
+      background: var(--cp-surface-soft);
+    }
+    .source-card strong { display: block; margin-bottom: 5px; }
+    .source-id {
+      color: var(--cp-accent);
+      font-family: Consolas, "Courier New", Courier, monospace;
+    }
+    .source-meta { color: var(--cp-text-muted); font-size: 11px; }
+    .source-open {
+      margin-top: 8px;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: var(--cp-link);
+      font-weight: 600;
+    }
+    .retrieval-note {
+      padding: 12px 16px;
+      border-top: 1px solid var(--cp-border);
+      color: var(--cp-text-muted);
+      font-size: 11px;
+    }
+    .hidden { display: none; }
+    #toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      padding: 12px 16px;
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      background: var(--cp-panel-strong);
+      box-shadow: var(--cp-shadow);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: 160ms ease;
+      pointer-events: none;
+    }
+    #toast.show { opacity: 1; transform: translateY(0); }
+
+    html[data-skin="tech"] body {
+      border-top: 4px solid var(--cp-accent);
+      background: var(--cp-bg-elevated);
+    }
+    html[data-skin="tech"] .topbar,
+    html[data-skin="tech"] .panel {
+      border-radius: 0;
+      box-shadow: none;
+      clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+    }
+    html[data-skin="tech"] .topbar {
+      border-color: var(--cp-link);
+      border-left-color: var(--cp-accent);
+      border-bottom: 3px solid var(--cp-link);
+    }
+    html[data-skin="tech"] .panel { border-top: 3px solid var(--cp-link); }
+    html[data-skin="tech"] .question-panel { border-top-color: var(--cp-accent); }
+    html[data-skin="tech"] .sources-panel { border-top-color: var(--cp-success); }
+    html[data-skin="tech"] .mode-select,
+    html[data-skin="tech"] .question-box,
+    html[data-skin="tech"] .button,
+    html[data-skin="tech"] .source-card {
+      border-radius: 0;
+    }
+    html[data-skin="tech"] .source-card {
+      border-left-color: var(--cp-success);
+      font-family: Consolas, "Courier New", Courier, monospace;
+    }
+    @media (max-width: 820px) {
+      .ask-layout { grid-template-columns: 1fr; }
+      .sources-panel { position: static; }
+    }
+    @media (max-width: 560px) {
+      .app { width: calc(100% - 20px); padding-top: 14px; }
+      .topbar, .question-actions { align-items: stretch; flex-direction: column; }
+      .mode-select { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">PRIVATE RAG // ON-DEVICE AI</p>
+        <h1>Ask AI 知识库</h1>
+        <p class="subtitle">从你的知识中检索、整合并给出可追溯回答。</p>
+        <div class="status" id="aiStatus"><span class="status-dot"></span><span>正在检测浏览器内置 AI…</span></div>
+      </div>
+      <button class="button" id="backButton" type="button">返回知识库</button>
+    </header>
+
+    <section class="ask-layout">
+      <div>
+        <div class="panel question-panel">
+          <label for="question">你想从知识库中了解什么？</label>
+          <textarea class="question-box" id="question" placeholder="例如：整合我关于 Agent 安全的观点，并列出下一步行动。"></textarea>
+          <div class="question-actions">
+            <select class="mode-select" id="answerMode" aria-label="回答模式">
+              <option value="synthesize">综合总结</option>
+              <option value="compare">对比分析</option>
+              <option value="actions">行动清单</option>
+              <option value="timeline">时间线</option>
+            </select>
+            <button class="button primary" id="askSubmit" type="button">检索并回答</button>
+          </div>
+        </div>
+
+        <article class="panel answer-panel">
+          <div class="answer-empty" id="answerEmpty">
+            <div>
+              <strong>答案将在这里生成</strong>
+              <p>问题会先在本地检索，再由浏览器内置 AI 综合。</p>
+            </div>
+          </div>
+          <div class="hidden" id="answerContent">
+            <div class="answer-head">
+              <h2>知识库回答</h2>
+              <button class="button" id="saveAnswer" type="button">保存回答</button>
+            </div>
+            <div class="markdown-body" id="answerMarkdown"></div>
+          </div>
+        </article>
+      </div>
+
+      <aside class="panel sources-panel">
+        <div class="sources-head">
+          <h2>检索来源</h2>
+          <p id="sourceCount">尚未检索</p>
+        </div>
+        <div class="source-list" id="sourceList"></div>
+        <div class="retrieval-note">检索与向量计算均在本地完成。只有选中的来源会交给浏览器内置 AI。</div>
+      </aside>
+    </section>
+  </main>
+  <div id="toast" role="status"></div>
+
+  <script src="storage.js"></script>
+  <script src="semantic.js"></script>
+  <script src="markdown.js"></script>
+  <script src="browser-ai.js"></script>
+  <script src="ask.js"></script>
+</body>
+</html>

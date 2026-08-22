@@ -1,0 +1,9 @@
+AI Knowledge Inbox Privacy
+==========================
+
+- Knowledge is stored in local SQLite.
+- OneDrive sync uses the user's own OneDrive folder.
+- The local service binds only to 127.0.0.1.
+- No hosted backend or telemetry is used.
+- Built-in AI is invoked locally when supported by the browser.
+- Uninstall preserves knowledge files to avoid accidental data loss.

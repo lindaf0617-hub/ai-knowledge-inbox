@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>保存到 AI 知识库</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    body { width: 390px; background: var(--cp-surface); }
+    main { padding: 18px; }
+    .head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    h1 { margin: 0 0 4px; font-size: 20px; }
+    .head p { margin: 0; color: var(--cp-text-muted); font-size: 12px; }
+    .library-link {
+      border: 0;
+      padding: 4px;
+      background: transparent;
+      color: var(--cp-link);
+      white-space: nowrap;
+    }
+    #status {
+      min-height: 18px;
+      margin: 10px 0 0;
+      color: var(--cp-success);
+      font-size: 12px;
+    }
+    #backend {
+      margin: -6px 0 12px;
+      color: var(--cp-text-muted);
+      font-size: 11px;
+    }
+    .label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+    .label-row label { margin: 0; }
+    .suggest-button {
+      border: 0;
+      padding: 2px 4px;
+      background: transparent;
+      color: var(--cp-link);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="head">
+      <div>
+        <h1>保存到知识库</h1>
+        <p>自动带入当前页面选中的文字。</p>
+      </div>
+      <button class="library-link" id="openLibrary" type="button">打开知识库</button>
+    </div>
+    <div id="backend">正在检测存储…</div>
+    <form id="entryForm">
+      <div class="field">
+        <label for="content">内容</label>
+        <textarea id="content" required placeholder="选中文字，或在这里粘贴…"></textarea>
+      </div>
+      <div class="field">
+        <label for="title">标题</label>
+        <input id="title" maxlength="120" placeholder="默认使用页面标题">
+      </div>
+      <div class="field">
+        <label for="project">项目（可选）</label>
+        <input id="project" maxlength="60" placeholder="例如：知识库 MVP">
+      </div>
+      <div class="field">
+        <div class="label-row">
+          <label for="tags">标签（可选）</label>
+          <button class="suggest-button" id="suggestTags" type="button">重新建议</button>
+        </div>
+        <input id="tags" maxlength="200" placeholder="产品, Agent, 灵感">
+        <p class="hint">根据当前内容在本地自动建议，可直接修改。</p>
+      </div>
+      <div class="field">
+        <label for="source">来源</label>
+        <input id="source" type="url" placeholder="https://…">
+      </div>
+      <div class="actions">
+        <button class="button primary" type="submit">保存</button>
+      </div>
+      <div id="status" role="status"></div>
+    </form>
+  </main>
+  <script src="storage.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

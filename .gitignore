@@ -1,0 +1,12 @@
+dist/
+*.zip
+*.sha256.txt
+*.db
+*.db-shm
+*.db-wal
+*.pid
+knowledge-sync.json
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
