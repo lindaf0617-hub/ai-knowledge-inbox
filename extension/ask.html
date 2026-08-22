@@ -87,6 +87,25 @@
       gap: 12px;
       margin-top: 12px;
     }
+    .provider-controls {
+      display: flex;
+      align-items: end;
+      gap: 10px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--cp-border);
+    }
+    .provider-field { display: grid; gap: 5px; min-width: 180px; }
+    .provider-field label { color: var(--cp-text-muted); font-size: 11px; }
+    .provider-field select,
+    .provider-field input {
+      height: 38px;
+      padding: 7px 9px;
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      background: var(--cp-surface);
+      color: var(--cp-text);
+    }
     .mode-select {
       width: 180px;
       height: 42px;
@@ -138,6 +157,26 @@
       border-left: 3px solid var(--cp-accent);
       background: var(--cp-accent-soft);
     }
+    .citation-warning {
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border: 1px solid var(--cp-warning);
+      border-left: 4px solid var(--cp-warning);
+      border-radius: 0.625rem;
+      background: var(--cp-accent-soft);
+    }
+    .citation-warning p { margin: 5px 0; }
+    .citation-warning ul { margin: 6px 0 0; padding-left: 20px; }
+    .citation-link {
+      border: 0;
+      padding: 0 2px;
+      background: transparent;
+      color: var(--cp-link);
+      font: inherit;
+      font-weight: 700;
+      text-decoration: underline;
+      cursor: pointer;
+    }
     .sources-panel {
       position: sticky;
       top: 20px;
@@ -158,12 +197,28 @@
       border-radius: 0.625rem;
       background: var(--cp-surface-soft);
     }
+    .source-card.citation-target {
+      outline: 3px solid var(--cp-accent);
+      outline-offset: 2px;
+    }
     .source-card strong { display: block; margin-bottom: 5px; }
     .source-id {
       color: var(--cp-accent);
       font-family: Consolas, "Courier New", Courier, monospace;
     }
-    .source-meta { color: var(--cp-text-muted); font-size: 11px; }
+    .source-score { color: var(--cp-success); font-size: 11px; font-weight: 700; }
+    .source-meta { margin-top: 2px; color: var(--cp-text-muted); font-size: 11px; }
+    .source-excerpt {
+      margin: 9px 0 0;
+      color: var(--cp-text);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .source-excerpt mark {
+      padding: 0 2px;
+      background: var(--cp-warning);
+      color: var(--cp-bg);
+    }
     .source-open {
       margin-top: 8px;
       border: 0;
@@ -231,6 +286,8 @@
       .app { width: calc(100% - 20px); padding-top: 14px; }
       .topbar, .question-actions { align-items: stretch; flex-direction: column; }
       .mode-select { width: 100%; }
+      .provider-controls { align-items: stretch; flex-direction: column; }
+      .provider-field { min-width: 0; }
     }
   </style>
 </head>
@@ -241,7 +298,7 @@
         <p class="eyebrow">PRIVATE RAG // ON-DEVICE AI</p>
         <h1>Ask AI 知识库</h1>
         <p class="subtitle">从你的知识中检索、整合并给出可追溯回答。</p>
-        <div class="status" id="aiStatus"><span class="status-dot"></span><span>正在检测浏览器内置 AI…</span></div>
+        <div class="status" id="aiStatus"><span class="status-dot"></span><span>正在检测 AI 提供方…</span></div>
       </div>
       <div class="top-actions">
         <select class="language-picker" id="languagePicker" aria-label="界面语言">
@@ -256,7 +313,20 @@
       <div>
         <div class="panel question-panel">
           <label for="question">你想从知识库中了解什么？</label>
-          <textarea class="question-box" id="question" placeholder="例如：整合我关于 Agent 安全的观点，并列出下一步行动。"></textarea>
+          <textarea class="question-box" id="question" maxlength="1200" placeholder="例如：整合我关于 Agent 安全的观点，并列出下一步行动。"></textarea>
+          <div class="provider-controls">
+            <div class="provider-field">
+              <label for="aiProvider">AI 提供方</label>
+              <select id="aiProvider">
+                <option value="browser">浏览器内置 Prompt API</option>
+                <option value="ollama">本地 Ollama</option>
+              </select>
+            </div>
+            <div class="provider-field hidden" id="ollamaSettings">
+              <label for="ollamaModel">Ollama 模型</label>
+              <input id="ollamaModel" type="text" maxlength="80" value="llama3.2" autocomplete="off" spellcheck="false">
+            </div>
+          </div>
           <div class="question-actions">
             <select class="mode-select" id="answerMode" aria-label="回答模式">
               <option value="synthesize">综合总结</option>
@@ -272,7 +342,7 @@
           <div class="answer-empty" id="answerEmpty">
             <div>
               <strong>答案将在这里生成</strong>
-              <p>问题会先在本地检索，再由浏览器内置 AI 综合。</p>
+              <p>问题会先在本地检索，再由所选 AI 提供方综合。</p>
             </div>
           </div>
           <div class="hidden" id="answerContent">
@@ -280,6 +350,7 @@
               <h2>知识库回答</h2>
               <button class="button" id="saveAnswer" type="button">保存回答</button>
             </div>
+            <div class="citation-warning hidden" id="citationWarning" role="alert"></div>
             <div class="markdown-body" id="answerMarkdown"></div>
           </div>
         </article>
@@ -291,7 +362,7 @@
           <p id="sourceCount">尚未检索</p>
         </div>
         <div class="source-list" id="sourceList"></div>
-        <div class="retrieval-note">检索与向量计算均在本地完成。只有选中的来源会交给浏览器内置 AI。</div>
+        <div class="retrieval-note">检索与向量计算均在本地完成。只有选中的来源会交给所选 AI 提供方。</div>
       </aside>
     </section>
   </main>
@@ -299,8 +370,10 @@
 
   <script src="storage.js"></script>
   <script src="semantic.js"></script>
+  <script src="retrieval.js"></script>
   <script src="citations.js"></script>
   <script src="markdown.js"></script>
+  <script src="providers.js"></script>
   <script src="browser-ai.js"></script>
   <script src="ask.js"></script>
 </body>

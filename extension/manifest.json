@@ -10,7 +10,8 @@
     "128": "icons/icon-128.png"
   },
   "host_permissions": [
-    "http://127.0.0.1:43127/*"
+    "http://127.0.0.1:43127/*",
+    "http://127.0.0.1:11434/*"
   ],
   "permissions": [
     "activeTab",

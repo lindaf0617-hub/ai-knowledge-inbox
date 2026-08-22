@@ -19,11 +19,15 @@ const MarkdownRenderer = (() => {
         element.textContent = token.slice(1, -1);
       } else {
         const parts = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
-        element = document.createElement("a");
-        element.textContent = parts[1];
-        element.href = parts[2];
-        element.target = "_blank";
-        element.rel = "noopener noreferrer";
+        if (/^K\d+$/.test(parts[1])) {
+          element = document.createTextNode(`[${parts[1]}]`);
+        } else {
+          element = document.createElement("a");
+          element.textContent = parts[1];
+          element.href = parts[2];
+          element.target = "_blank";
+          element.rel = "noopener noreferrer";
+        }
       }
 
       parent.append(element);

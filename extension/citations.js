@@ -27,5 +27,27 @@ const CitationGuard = (() => {
     };
   }
 
-  return { citedIds, validate };
+  function splitTokens(text) {
+    const value = String(text || "");
+    const output = [];
+    let lastIndex = 0;
+    for (const match of value.matchAll(/\[K(\d+)\]/g)) {
+      if (match.index > lastIndex) {
+        output.push({ type: "text", value: value.slice(lastIndex, match.index) });
+      }
+      output.push({ type: "citation", value: match[0], id: Number(match[1]) });
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < value.length) output.push({ type: "text", value: value.slice(lastIndex) });
+    return output;
+  }
+
+  function normalizeCitationLinks(markdown) {
+    return String(markdown || "").replace(
+      /\[K(\d+)\]\([^)\r\n]*\)/g,
+      (_match, id) => `[K${id}]`
+    );
+  }
+
+  return { citedIds, normalizeCitationLinks, splitTokens, validate };
 })();

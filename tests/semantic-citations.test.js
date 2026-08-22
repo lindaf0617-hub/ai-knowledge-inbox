@@ -69,3 +69,35 @@ test("citation guard flags long uncited paragraphs", () => {
   );
   assert.equal(result.uncited.length, 1);
 });
+
+test("citation guard requires at least one valid citation", () => {
+  const result = citations.validate("A substantial answer without evidence.", 2);
+  assert.equal(result.valid, false);
+  assert.deepEqual([...result.cited], []);
+});
+
+test("citation tokens are split without HTML transformation", () => {
+  const result = citations.splitTokens("First [K1], then [K2].");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result)),
+    [
+      { type: "text", value: "First " },
+      { type: "citation", value: "[K1]", id: 1 },
+      { type: "text", value: ", then " },
+      { type: "citation", value: "[K2]", id: 2 },
+      { type: "text", value: "." }
+    ]
+  );
+});
+
+test("citation-labeled Markdown links discard model-controlled URLs", () => {
+  const answer = citations.normalizeCitationLinks(
+    "Grounded claim [K1](https://evil.example/path). Normal [documentation](https://example.com)."
+  );
+  assert.equal(
+    answer,
+    "Grounded claim [K1]. Normal [documentation](https://example.com)."
+  );
+  assert.equal(citations.validate(answer, 1).valid, true);
+  assert.doesNotMatch(answer, /evil\.example/);
+});

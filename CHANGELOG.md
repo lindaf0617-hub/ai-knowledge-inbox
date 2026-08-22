@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added normalized retrieval scores, query-centered source excerpts, stable source cards, and accessible citation links.
+- Enforced at least one valid citation, rejected unknown source IDs, and added a persistent warning for substantial uncited paragraphs.
+- Added an Ask provider registry with browser Prompt API and localhost-only Ollama support, persisted non-secret provider/model settings, bounded prompts, and explicit local-service/model errors.
 - Added explicit SQLite schema migrations with safe v1-to-v2 data retention.
 - Replaced shared-snapshot synchronization with authoritative per-device operation logs, causal version vectors, deterministic concurrent-operation handling, and persistent conflict-resolution APIs.
 - Kept `knowledge-sync.json` as a derived readable compatibility snapshot.

@@ -13,7 +13,7 @@ It provides:
 - One-keystroke desktop capture: Windows `Ctrl + ;`, macOS `Command + ;`
 - Right-click web selection capture with Markdown preservation
 - Projects, tags, summaries, keyword search, and local semantic vectors
-- Grounded Ask: local retrieval, browser built-in AI, and `[K1]` citations
+- Grounded Ask: local retrieval, browser built-in AI or local Ollama, clickable `[K1]` citations, retrieval scores, and exact source excerpts
 - Local SQLite storage and user-owned OneDrive sync
 - Causal operation-log sync, explicit conflict resolution, and seven retained daily SQLite backups
 - Chinese and English UI
@@ -46,9 +46,18 @@ The macOS Beta is not notarized yet. Control-click the app and choose **Open** o
 - The service listens only on `127.0.0.1`.
 - Sync uses the user's own OneDrive.
 - There is no hosted backend, advertising, or telemetry.
-- Ask uses browser built-in AI only when Prompt API is supported.
+- Ask uses either browser Prompt API or a user-selected Ollama service fixed to `127.0.0.1:11434`; it does not accept cloud model endpoints.
 
 See [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md).
+
+## Ask AI providers
+
+The Ask page can use browser built-in Prompt API or local Ollama and lets the
+user set the Ollama model name (`llama3.2` by default). Provider and model are
+non-secret settings stored in `chrome.storage.local`. Ollama must run at
+`127.0.0.1:11434`; Ask calls `/api/chat` with streaming disabled. Azure and API
+keys are intentionally not supported yet because cloud credentials require a
+secure secret-storage and permission design.
 
 Sync v2 stores one device-owned operation log per device under
 `Apps\AI Knowledge Inbox\operations`; `knowledge-sync.json` remains a readable

@@ -16,6 +16,9 @@ AI Knowledge Inbox is designed to keep knowledge under the user's control.
 - Requests from normal web origins are rejected.
 - The project does not operate a hosted backend or telemetry endpoint.
 - Browser built-in AI is invoked locally when the browser exposes Prompt API.
+- If the user selects Ollama in Ask, only the question and selected, length-bounded source content are sent to the local Ollama API at `http://127.0.0.1:11434`; cloud endpoints are not configurable.
+- The selected AI provider and Ollama model name are stored in `chrome.storage.local`. These are non-secret preferences.
+- Azure and API-key providers are not implemented. They require a future secure secret-storage and permission design.
 
 ## Deletion
 
