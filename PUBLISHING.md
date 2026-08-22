@@ -33,7 +33,8 @@ Enable:
 3. Create and push tag `v1.6.0`.
 4. The Release workflow builds and attaches:
    - `AI-Knowledge-Inbox-1.6.0-Windows.zip`
-   - `AI-Knowledge-Inbox-1.6.0-macOS-unsigned.dmg`
+   - `AI-Knowledge-Inbox-1.6.0-macOS-arm64-unsigned.dmg`
+   - `AI-Knowledge-Inbox-1.6.0-macOS-x64-unsigned.dmg`
    - `AI-Knowledge-Inbox-Extension-1.6.0.zip`
    - `SHA256SUMS.txt`
 5. Mark the GitHub Release as **pre-release** while Beta testing continues.

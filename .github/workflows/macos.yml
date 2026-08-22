@@ -23,4 +23,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos-package
-          path: dist/*macOS-unsigned.dmg
+          path: dist/*macOS-*-unsigned.dmg

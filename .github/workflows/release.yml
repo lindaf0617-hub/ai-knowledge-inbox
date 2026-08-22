@@ -46,7 +46,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos-release
-          path: dist/*macOS-unsigned.dmg
+          path: dist/*macOS-*-unsigned.dmg
 
   publish:
     needs: [windows, macos]
@@ -60,7 +60,7 @@ jobs:
       - name: Add macOS checksum
         run: |
           cd dist
-          sha256sum *macOS-unsigned.dmg >> SHA256SUMS.txt
+          sha256sum *macOS-*-unsigned.dmg >> SHA256SUMS.txt
       - name: Create GitHub pre-release
         uses: softprops/action-gh-release@v2
         with:
@@ -68,6 +68,6 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             dist/AI-Knowledge-Inbox-*-Windows.zip
-            dist/AI-Knowledge-Inbox-*-macOS-unsigned.dmg
+            dist/AI-Knowledge-Inbox-*-macOS-*-unsigned.dmg
             dist/AI-Knowledge-Inbox-Extension-*.zip
             dist/SHA256SUMS.txt

@@ -33,7 +33,8 @@ AI Knowledge Inbox 解决一个简单问题：**AI 每天生成很多有价值�
 从 [v1.6.0 Beta](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/tag/v1.6.0) 下载：
 
 - Windows：`AI-Knowledge-Inbox-<version>-Windows.zip`
-- macOS：`AI-Knowledge-Inbox-<version>-macOS-unsigned.dmg`
+- Apple Silicon：`AI-Knowledge-Inbox-<version>-macOS-arm64-unsigned.dmg`
+- Intel Mac：`AI-Knowledge-Inbox-<version>-macOS-x64-unsigned.dmg`
 - 仅浏览器扩展：`AI-Knowledge-Inbox-Extension-<version>.zip`
 
 Windows 解压后运行 `安装 Beta.cmd`。macOS 首个 Beta 尚未签名，需按 Release 说明允许打开。
