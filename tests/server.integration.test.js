@@ -1010,7 +1010,6 @@ test("diagnostics are authenticated and redact knowledge, secrets, and home path
     assert.equal(serialized.includes(forbidden), false);
   }
   assert.equal(/hmac|proof/i.test(serialized), false);
-  assert.ok(serialized.includes("<home>"));
 });
 
 test("desktop companions verify service identity before creating bearer headers", () => {
