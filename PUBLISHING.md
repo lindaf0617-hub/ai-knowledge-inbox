@@ -12,7 +12,7 @@ The Windows companion should remain on GitHub Releases until it is code-signed. 
 
 ## Repository settings
 
-- Owner: `lindaf0617-hub`
+- Owner: `lfeng_microsoft`
 - Repository: `ai-knowledge-inbox`
 - Visibility: Public
 - Default branch: `main`

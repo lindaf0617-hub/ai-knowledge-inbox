@@ -28,7 +28,7 @@ AI Knowledge Inbox 解决一个简单问题：**AI 每天生成很多有价值�
 
 ## 安装
 
-从 [Releases](https://github.com/lindaf0617-hub/ai-knowledge-inbox/releases/latest) 下载：
+从 [Releases](https://github.com/lfeng_microsoft/ai-knowledge-inbox/releases/latest) 下载：
 
 - Windows：`AI-Knowledge-Inbox-<version>-Windows.zip`
 - macOS：`AI-Knowledge-Inbox-<version>-macOS-unsigned.dmg`
