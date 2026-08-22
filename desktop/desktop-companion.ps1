@@ -5,9 +5,13 @@ $ErrorActionPreference = "Stop"
 $serviceUrl = "http://127.0.0.1:43127"
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serverPath = Join-Path $scriptRoot "server.js"
-$pidFile = Join-Path (Join-Path $env:LOCALAPPDATA "AIKnowledgeInbox") "companion.pid"
+$dataDir = Join-Path $env:LOCALAPPDATA "AIKnowledgeInbox"
+$pidFile = Join-Path $dataDir "companion.pid"
+$authTokenPath = Join-Path $dataDir "auth-token"
+$script:authToken = ""
 $script:serviceProcess = $null
 $script:captureOpen = $false
+$script:proofValidUntil = [DateTime]::MinValue
 
 Add-Type -ReferencedAssemblies System.Windows.Forms.dll -TypeDefinition @"
 using System;
@@ -105,6 +109,124 @@ function Test-KnowledgeService {
         return $result.status -eq "ok"
     } catch {
         return $false
+    }
+}
+
+function Initialize-AuthToken {
+    if (-not (Test-Path -LiteralPath $authTokenPath)) {
+        throw "The local service authentication token is missing."
+    }
+    $script:authToken = (Get-Content -LiteralPath $authTokenPath -Raw).Trim()
+    if (-not $script:authToken) {
+        throw "The local service authentication token is invalid."
+    }
+}
+
+function Reset-ServiceProof {
+    $script:proofValidUntil = [DateTime]::MinValue
+}
+
+function New-AuthenticationNonce {
+    $bytes = New-Object byte[] 32
+    $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $generator.GetBytes($bytes)
+    } finally {
+        $generator.Dispose()
+    }
+    return (($bytes | ForEach-Object { $_.ToString("x2") }) -join "")
+}
+
+function Test-FixedTimeHex([string]$left, [string]$right) {
+    if ($null -eq $left -or $null -eq $right -or $left.Length -ne $right.Length) {
+        return $false
+    }
+    $difference = 0
+    for ($index = 0; $index -lt $left.Length; $index++) {
+        $difference = $difference -bor ([int][char]$left[$index] -bxor [int][char]$right[$index])
+    }
+    return $difference -eq 0
+}
+
+function Assert-ServiceIdentity {
+    if ($script:proofValidUntil -and [DateTime]::UtcNow -lt $script:proofValidUntil) {
+        return
+    }
+    try {
+        $domain = "AIKnowledgeInbox.LocalAPI.AuthChallenge"
+        $protocol = 1
+        $nonce = New-AuthenticationNonce
+        $body = @{ protocol = $protocol; nonce = $nonce } | ConvertTo-Json -Compress
+        $challenge = Invoke-RestMethod -Uri "$serviceUrl/auth/challenge" -Method Post `
+            -ContentType "application/json; charset=utf-8" `
+            -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 3
+        if ($challenge.domain -ne $domain -or
+            [int]$challenge.protocol -ne $protocol -or
+            $challenge.nonce -cne $nonce -or
+            $challenge.proof -notmatch "^[a-f0-9]{64}$") {
+            throw "Invalid challenge response."
+        }
+        $hmac = New-Object System.Security.Cryptography.HMACSHA256(
+            (,[System.Text.Encoding]::UTF8.GetBytes($script:authToken))
+        )
+        try {
+            $message = "$domain`n$protocol`n$nonce"
+            $expected = (($hmac.ComputeHash(
+                [System.Text.Encoding]::UTF8.GetBytes($message)
+            ) | ForEach-Object { $_.ToString("x2") }) -join "")
+        } finally {
+            $hmac.Dispose()
+        }
+        if (-not (Test-FixedTimeHex $expected ([string]$challenge.proof))) {
+            throw "Challenge proof did not match."
+        }
+        $script:proofValidUntil = [DateTime]::UtcNow.AddSeconds(15)
+    } catch {
+        Reset-ServiceProof
+        throw "SECURITY ERROR: The desktop service identity could not be verified. No credential was sent. Stop and restart the companion."
+    }
+}
+
+function Get-AuthHeaders {
+    Assert-ServiceIdentity
+    return @{ Authorization = "Bearer $script:authToken" }
+}
+
+function Show-PairingCode {
+    try {
+        $pairing = Invoke-RestMethod -Uri "$serviceUrl/pairing/code" -Method Post `
+            -Headers (Get-AuthHeaders) -TimeoutSec 3
+        [System.Windows.Forms.MessageBox]::Show(
+            "Enter this one-time code in the extension popup:`r`n`r`n$($pairing.code)`r`n`r`nIt expires in 5 minutes.",
+            "Pair browser extension",
+            "OK",
+            "Information"
+        ) | Out-Null
+    } catch {
+        Reset-ServiceProof
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message, "Pairing failed", "OK", "Error"
+        ) | Out-Null
+    }
+}
+
+function Save-Diagnostics {
+    try {
+        $diagnostics = Invoke-RestMethod -Uri "$serviceUrl/diagnostics" -Method Get `
+            -Headers (Get-AuthHeaders) -TimeoutSec 3
+        $dialog = New-Object System.Windows.Forms.SaveFileDialog
+        $dialog.Filter = "JSON files (*.json)|*.json"
+        $dialog.FileName = "ai-knowledge-inbox-diagnostics.json"
+        if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $diagnostics | ConvertTo-Json -Depth 10 |
+                Set-Content -LiteralPath $dialog.FileName -Encoding UTF8
+        }
+        $dialog.Dispose()
+    } catch {
+        Reset-ServiceProof
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message, "Diagnostics export failed", "OK", "Error"
+        ) | Out-Null
     }
 }
 
@@ -397,6 +519,7 @@ function Show-CaptureWindow {
             Invoke-RestMethod `
                 -Uri "$serviceUrl/entries" `
                 -Method Post `
+                -Headers (Get-AuthHeaders) `
                 -ContentType "application/json; charset=utf-8" `
                 -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) | Out-Null
 
@@ -404,6 +527,7 @@ function Show-CaptureWindow {
             $form.Close()
             Show-Balloon "Saved" "Clipboard content was added to the AI knowledge inbox." Info
         } catch {
+            Reset-ServiceProof
             $message = $_.ErrorDetails.Message
             if ($message) {
                 try { $message = ($message | ConvertFrom-Json).error } catch {}
@@ -458,6 +582,8 @@ try {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $pidFile) | Out-Null
     Set-Content -LiteralPath $pidFile -Value $PID -Encoding ASCII
     Start-KnowledgeService
+    Initialize-AuthToken
+    Assert-ServiceIdentity
 
     $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
     $notifyIcon.Icon = [System.Drawing.SystemIcons]::Information
@@ -466,6 +592,8 @@ try {
 
     $menu = New-Object System.Windows.Forms.ContextMenuStrip
     $captureItem = $menu.Items.Add("Save clipboard (Ctrl+;)")
+    $pairItem = $menu.Items.Add("Pair browser extension...")
+    $diagnosticsItem = $menu.Items.Add("Save diagnostics...")
     $dataItem = $menu.Items.Add("Open data folder")
     $menu.Items.Add("-") | Out-Null
     $exitItem = $menu.Items.Add("Exit")
@@ -474,9 +602,10 @@ try {
     $hotKey = New-Object GlobalHotKeyWindow(1, 0x0002, 0xBA)
     $hotKey.add_Pressed({ Show-CaptureWindow })
     $captureItem.Add_Click({ Show-CaptureWindow })
+    $pairItem.Add_Click({ Show-PairingCode })
+    $diagnosticsItem.Add_Click({ Save-Diagnostics })
     $notifyIcon.Add_DoubleClick({ Show-CaptureWindow })
     $dataItem.Add_Click({
-        $dataDir = Join-Path $env:LOCALAPPDATA "AIKnowledgeInbox"
         Start-Process explorer.exe -ArgumentList "`"$dataDir`""
     })
     $exitItem.Add_Click({ [System.Windows.Forms.Application]::Exit() })

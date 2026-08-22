@@ -45,6 +45,16 @@
       color: var(--cp-text-muted);
       font-size: 11px;
     }
+    #pairing {
+      display: none;
+      margin: 0 0 14px;
+      padding: 12px;
+      border: 1px solid var(--cp-warning);
+      border-radius: 10px;
+    }
+    #pairing p { margin: 0 0 8px; color: var(--cp-text-muted); font-size: 12px; }
+    .pair-row { display: flex; gap: 8px; }
+    .pair-row input { text-transform: uppercase; }
     html[data-skin="tech"] body {
       border-top: 4px solid var(--cp-accent);
       background:
@@ -96,6 +106,13 @@
       </div>
     </div>
     <div id="backend">正在检测存储…</div>
+    <form id="pairing">
+      <p>在桌面伴侣菜单中生成配对码，然后在这里输入。</p>
+      <div class="pair-row">
+        <input id="pairingCode" maxlength="8" autocomplete="one-time-code" placeholder="8 位配对码">
+        <button class="button" type="submit">配对</button>
+      </div>
+    </form>
     <form id="entryForm">
       <div class="field">
         <label for="content">内容</label>

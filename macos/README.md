@@ -33,4 +33,8 @@ Open the DMG and drag the app to Applications. Because the Beta is not notarized
 2. Select **Open**
 3. Confirm the Gatekeeper prompt
 
+After loading the unpacked browser extension, choose **Pair Browser Extension…**
+from the menu-bar companion and enter the displayed one-time code in the
+extension popup. Use **Save Diagnostics…** to export a sanitized support report.
+
 Production distribution requires Apple Developer ID signing and notarization.

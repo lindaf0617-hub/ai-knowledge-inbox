@@ -38,12 +38,22 @@ Download the [v1.6.0 Beta](https://github.com/lindaf0617-hub/ai-knowledge-inbox/
 
 The macOS Beta is not notarized yet. Control-click the app and choose **Open** on first launch.
 
+### Pair the browser extension
+
+On first connection (or after reinstalling the companion), choose **Pair Browser
+Extension…** from the Windows tray or macOS menu-bar icon and enter the shown
+8-character one-time code in the extension popup. It expires after five minutes
+and works once. The extension stores its credential in `chrome.storage.local`.
+Existing browser-local knowledge remains untouched until authenticated migration
+succeeds. Browser-local mode remains available while the companion is offline.
+
 ---
 
 ## Privacy
 
 - The primary database is local SQLite.
 - The service listens only on `127.0.0.1`.
+- Sensitive local APIs require a random per-install bearer credential; web origins are rejected.
 - Sync uses the user's own OneDrive.
 - There is no hosted backend, advertising, or telemetry.
 - Ask uses either browser Prompt API or a user-selected Ollama service fixed to `127.0.0.1:11434`; it does not accept cloud model endpoints.
@@ -66,6 +76,9 @@ compatibility snapshot. The desktop service exposes `/sync/status`,
 During the bounded v1 migration window, v2 treats that snapshot as read-only
 input to avoid overwriting late v1 changes; v1 devices therefore do not receive
 new v2-originated changes until the window is completed.
+These APIs and the sanitized `/diagnostics` endpoint require pairing. The companion
+menu can save diagnostics as JSON; it excludes knowledge titles, content, source
+URLs, credentials, and operation payloads.
 
 ---
 

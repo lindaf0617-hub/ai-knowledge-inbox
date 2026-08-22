@@ -1,6 +1,9 @@
 import AppKit
 import Carbon
+import CryptoKit
 import Foundation
+import Security
+import UniformTypeIdentifiers
 
 private let serviceURL = URL(string: "http://127.0.0.1:43127")!
 
@@ -11,11 +14,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var serviceProcess: Process?
     private var captureWindow: NSWindow?
     private var captureController: CaptureWindowController?
+    private var proofValidUntil = Date.distantPast
+    private var proofToken = ""
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         do {
             try startService()
+            try verifyServiceIdentity()
             configureStatusItem()
             try registerHotKey()
             notify(title: "AI Knowledge Companion", text: "Copy AI content and press Command + ;")
@@ -40,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         let menu = NSMenu()
         menu.addItem(withTitle: "Save Clipboard (Command + ;)", action: #selector(showCapture), keyEquivalent: "")
+        menu.addItem(withTitle: "Pair Browser Extension…", action: #selector(showPairingCode), keyEquivalent: "")
+        menu.addItem(withTitle: "Save Diagnostics…", action: #selector(saveDiagnostics), keyEquivalent: "")
         menu.addItem(withTitle: "Open Knowledge Data", action: #selector(openDataFolder), keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "q")
@@ -154,6 +162,183 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return healthy
     }
 
+    private var dataDirectory: URL {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AIKnowledgeInbox", isDirectory: true)
+    }
+
+    private func loadAuthToken() throws -> String {
+        let tokenURL = dataDirectory.appendingPathComponent("auth-token")
+        let token = try String(contentsOf: tokenURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            throw CompanionError.message("The local service authentication token is invalid.")
+        }
+        return token
+    }
+
+    private func randomNonce() throws -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let result = bytes.withUnsafeMutableBytes { buffer in
+            SecRandomCopyBytes(kSecRandomDefault, buffer.count, buffer.baseAddress!)
+        }
+        guard result == errSecSuccess else {
+            throw CompanionError.message("Could not generate an authentication nonce.")
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func proofBytes(_ value: String) -> [UInt8]? {
+        guard value.count == 64 else { return nil }
+        var result: [UInt8] = []
+        var index = value.startIndex
+        while index < value.endIndex {
+            let end = value.index(index, offsetBy: 2)
+            guard let byte = UInt8(value[index..<end], radix: 16) else { return nil }
+            result.append(byte)
+            index = end
+        }
+        return result
+    }
+
+    private func fixedTimeEqual(_ left: [UInt8], _ right: [UInt8]) -> Bool {
+        guard left.count == right.count else { return false }
+        var difference: UInt8 = 0
+        for index in left.indices { difference |= left[index] ^ right[index] }
+        return difference == 0
+    }
+
+    private func invalidateServiceProof() {
+        proofValidUntil = .distantPast
+        proofToken = ""
+    }
+
+    private func verifyServiceIdentity() throws {
+        do {
+            let token = try loadAuthToken()
+            if token == proofToken && Date() < proofValidUntil { return }
+            invalidateServiceProof()
+            let domain = "AIKnowledgeInbox.LocalAPI.AuthChallenge"
+            let protocolVersion = 1
+            let nonce = try randomNonce()
+            var request = URLRequest(url: serviceURL.appendingPathComponent("auth/challenge"))
+            request.httpMethod = "POST"
+            request.timeoutInterval = 3
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "protocol": protocolVersion,
+                "nonce": nonce
+            ])
+
+            let semaphore = DispatchSemaphore(value: 0)
+            var responseData: Data?
+            var responseStatus = 0
+            URLSession.shared.dataTask(with: request) { data, response, _ in
+                responseData = data
+                responseStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+                semaphore.signal()
+            }.resume()
+            guard semaphore.wait(timeout: .now() + 4) == .success,
+                  responseStatus == 200,
+                  let responseData,
+                  let challenge = try? JSONDecoder().decode(
+                    AuthenticationChallenge.self,
+                    from: responseData
+                  ),
+                  challenge.domain == domain,
+                  challenge.protocolVersion == protocolVersion,
+                  challenge.nonce == nonce,
+                  let supplied = proofBytes(challenge.proof)
+            else {
+                throw CompanionError.message("Invalid authentication challenge.")
+            }
+            let message = "\(domain)\n\(protocolVersion)\n\(nonce)"
+            let key = SymmetricKey(data: Data(token.utf8))
+            let expected = Array(HMAC<SHA256>.authenticationCode(
+                for: Data(message.utf8),
+                using: key
+            ))
+            guard fixedTimeEqual(expected, supplied) else {
+                throw CompanionError.message("Authentication challenge did not match.")
+            }
+            proofValidUntil = Date().addingTimeInterval(15)
+            proofToken = token
+        } catch {
+            invalidateServiceProof()
+            throw CompanionError.message(
+                "SECURITY ERROR: The desktop service identity could not be verified. No credential was sent. Stop and restart the companion."
+            )
+        }
+    }
+
+    private func authorizedRequest(path: String, method: String = "GET") throws -> URLRequest {
+        try verifyServiceIdentity()
+        let token = try loadAuthToken()
+        var request = URLRequest(url: serviceURL.appendingPathComponent(path))
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    @objc private func showPairingCode() {
+        do {
+            let request = try authorizedRequest(path: "pairing/code", method: "POST")
+            URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+                DispatchQueue.main.async {
+                    if let error {
+                        self?.invalidateServiceProof()
+                        self?.showError(error.localizedDescription)
+                        return
+                    }
+                    guard (response as? HTTPURLResponse)?.statusCode == 201,
+                          let data,
+                          let result = try? JSONDecoder().decode(PairingResult.self, from: data)
+                    else {
+                        self?.invalidateServiceProof()
+                        self?.showError("Could not generate a pairing code.")
+                        return
+                    }
+                    let alert = NSAlert()
+                    alert.messageText = "Pair Browser Extension"
+                    alert.informativeText = "Enter this one-time code in the extension popup:\n\n\(result.code)\n\nIt expires in 5 minutes."
+                    alert.runModal()
+                }
+            }.resume()
+        } catch {
+            showError(error.localizedDescription)
+        }
+    }
+
+    @objc private func saveDiagnostics() {
+        do {
+            let request = try authorizedRequest(path: "diagnostics")
+            URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+                DispatchQueue.main.async {
+                    if let error {
+                        self?.invalidateServiceProof()
+                        self?.showError(error.localizedDescription)
+                        return
+                    }
+                    guard (response as? HTTPURLResponse)?.statusCode == 200, let data else {
+                        self?.invalidateServiceProof()
+                        self?.showError("Could not export diagnostics.")
+                        return
+                    }
+                    let panel = NSSavePanel()
+                    panel.nameFieldStringValue = "ai-knowledge-inbox-diagnostics.json"
+                    panel.allowedContentTypes = [.json]
+                    if panel.runModal() == .OK, let url = panel.url {
+                        do { try data.write(to: url, options: .atomic) }
+                        catch { self?.showError(error.localizedDescription) }
+                    }
+                }
+            }.resume()
+        } catch {
+            showError(error.localizedDescription)
+        }
+    }
+
     @objc private func showCapture() {
         guard captureWindow == nil else {
             captureWindow?.makeKeyAndOrderFront(nil)
@@ -185,18 +370,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func save(payload: EntryPayload) {
         guard let body = try? JSONEncoder().encode(payload) else { return }
-        var request = URLRequest(url: serviceURL.appendingPathComponent("entries"))
-        request.httpMethod = "POST"
+        guard var request = try? authorizedRequest(path: "entries", method: "POST") else {
+            showError("The local service authentication token is unavailable.")
+            return
+        }
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 if let error {
+                    self?.invalidateServiceProof()
                     self?.showError(error.localizedDescription)
                     return
                 }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 if !(200..<300).contains(status) {
+                    self?.invalidateServiceProof()
                     let message = data.flatMap { try? JSONDecoder().decode(APIError.self, from: $0).error }
                         ?? "Save failed."
                     self?.showError(message)
@@ -401,6 +590,18 @@ struct EntryPayload: Codable {
 }
 
 struct APIError: Codable { let error: String }
+struct PairingResult: Codable { let code: String }
+struct AuthenticationChallenge: Codable {
+    let domain: String
+    let protocolVersion: Int
+    let nonce: String
+    let proof: String
+
+    enum CodingKeys: String, CodingKey {
+        case domain, nonce, proof
+        case protocolVersion = "protocol"
+    }
+}
 
 enum CompanionError: LocalizedError {
     case message(String)

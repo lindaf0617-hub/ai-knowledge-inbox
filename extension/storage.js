@@ -2,6 +2,11 @@ const KnowledgeStore = (() => {
   const API_BASE = globalThis.__AI_KNOWLEDGE_API_BASE || "http://127.0.0.1:43127";
   let backend = "unknown";
   let migrationPromise = null;
+  const TOKEN_KEY = "desktopApiToken";
+  const AUTH_DOMAIN = "AIKnowledgeInbox.LocalAPI.AuthChallenge";
+  const AUTH_PROTOCOL = 1;
+  const PROOF_CACHE_MS = 15_000;
+  let proofCache = { token: "", expiresAt: 0 };
 
   function isValidEntry(entry) {
     return entry &&
@@ -78,32 +83,151 @@ const KnowledgeStore = (() => {
     return firstLine.trim().slice(0, 60);
   }
 
-  async function serverRequest(path, options = {}) {
+  function invalidateServiceProof() {
+    proofCache = { token: "", expiresAt: 0 };
+  }
+
+  function serviceIdentityError() {
+    const error = new Error("安全错误：无法验证桌面伴侣身份，请停止操作并重新启动桌面伴侣");
+    error.serviceIdentityMismatch = true;
+    backend = "security";
+    return error;
+  }
+
+  function unavailableError(cause) {
+    const error = new Error("桌面知识服务未运行");
+    error.serverUnavailable = true;
+    error.cause = cause;
+    return error;
+  }
+
+  async function fetchWithTimeout(url, options = {}) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1800);
-    let response;
     try {
-      response = await fetch(`${API_BASE}${path}`, {
+      return await fetch(url, {
         ...options,
-        headers: {
-          ...(options.body ? { "Content-Type": "application/json" } : {}),
-          ...(options.headers || {})
-        },
         signal: controller.signal
       });
-    } catch (error) {
-      const unavailable = new Error("桌面知识服务未运行");
-      unavailable.serverUnavailable = true;
-      unavailable.cause = error;
-      throw unavailable;
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  function randomNonce() {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    return [...bytes].map(value => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  function proofBytes(value) {
+    if (typeof value !== "string" || !/^[a-f0-9]{64}$/i.test(value)) return null;
+    return new Uint8Array(value.match(/../g).map(byte => Number.parseInt(byte, 16)));
+  }
+
+  function fixedTimeEqual(left, right) {
+    if (!(left instanceof Uint8Array) || !(right instanceof Uint8Array) ||
+        left.length !== right.length) return false;
+    let difference = 0;
+    for (let index = 0; index < left.length; index += 1) {
+      difference |= left[index] ^ right[index];
+    }
+    return difference === 0;
+  }
+
+  async function verifyServiceIdentity(token, force = false) {
+    if (!force && proofCache.token === token && Date.now() < proofCache.expiresAt) return;
+    invalidateServiceProof();
+    const nonce = randomNonce();
+    let response;
+    try {
+      response = await fetchWithTimeout(`${API_BASE}/auth/challenge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ protocol: AUTH_PROTOCOL, nonce })
+      });
+    } catch (error) {
+      throw unavailableError(error);
+    }
+    const challenge = await response.json().catch(() => ({}));
+    if (!response.ok ||
+        challenge.domain !== AUTH_DOMAIN ||
+        challenge.protocol !== AUTH_PROTOCOL ||
+        challenge.nonce !== nonce) {
+      throw serviceIdentityError();
+    }
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(token),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const message = `${AUTH_DOMAIN}\n${AUTH_PROTOCOL}\n${nonce}`;
+    const expected = new Uint8Array(await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(message)
+    ));
+    if (!fixedTimeEqual(expected, proofBytes(challenge.proof))) {
+      throw serviceIdentityError();
+    }
+    proofCache = { token, expiresAt: Date.now() + PROOF_CACHE_MS };
+  }
+
+  async function requireToken() {
+    const stored = await chrome.storage.local.get({ [TOKEN_KEY]: "" });
+    const token = stored[TOKEN_KEY];
+    if (token) return token;
+    try {
+      await fetchWithTimeout(`${API_BASE}/health`);
+    } catch (error) {
+      throw unavailableError(error);
+    }
+    const error = new Error("请先配对桌面伴侣");
+    error.status = 401;
+    error.pairingRequired = true;
+    backend = "pairing";
+    throw error;
+  }
+
+  async function serverRequest(path, options = {}) {
+    const skipAuth = options.skipAuth === true;
+    const token = skipAuth ? "" : await requireToken();
+    if (token) await verifyServiceIdentity(token);
+    const requestOptions = { ...options };
+    delete requestOptions.skipAuth;
+    let response;
+    try {
+      response = await fetchWithTimeout(`${API_BASE}${path}`, {
+        ...requestOptions,
+        headers: {
+          ...(options.body ? { "Content-Type": "application/json" } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(options.headers || {})
+        }
+      });
+    } catch (error) {
+      invalidateServiceProof();
+      throw unavailableError(error);
+    }
 
     const data = await response.json().catch(() => ({}));
+    if (response.ok && data.authRequired === true) {
+      const error = new Error("请先配对桌面伴侣");
+      error.status = 401;
+      error.pairingRequired = true;
+      backend = "pairing";
+      throw error;
+    }
     if (!response.ok) {
+      if (response.status === 401) invalidateServiceProof();
       const error = new Error(data.error || `本地服务错误（${response.status}）`);
       error.status = response.status;
+      if (response.status === 401) {
+        backend = "pairing";
+        error.pairingRequired = true;
+        error.message = "请先配对桌面伴侣";
+      }
       throw error;
     }
     return data;
@@ -151,6 +275,10 @@ const KnowledgeStore = (() => {
         ? result.entries.filter(isValidEntry).map(normalizeEntry)
         : [];
     } catch (error) {
+      if (error.pairingRequired) {
+        backend = "pairing";
+        return getLocalEntries();
+      }
       return useFallback(error, getLocalEntries);
     }
   }
@@ -302,6 +430,14 @@ const KnowledgeStore = (() => {
       await serverRequest("/health");
       backend = "server";
     } catch (error) {
+      if (error.serviceIdentityMismatch) {
+        backend = "security";
+        return backend;
+      }
+      if (error.pairingRequired) {
+        backend = "pairing";
+        return backend;
+      }
       if (!error.serverUnavailable) throw error;
       backend = "local";
     }
@@ -315,6 +451,16 @@ const KnowledgeStore = (() => {
       backend = "server";
       return result;
     } catch (error) {
+      if (error.pairingRequired) {
+        backend = "pairing";
+        return {
+          enabled: false,
+          status: "pairing",
+          path: "",
+          lastSyncAt: "",
+          lastError: "请先配对桌面伴侣"
+        };
+      }
       if (!error.serverUnavailable) throw error;
       backend = "local";
       return {
@@ -339,6 +485,28 @@ const KnowledgeStore = (() => {
     }
   }
 
+  async function pairDesktop(code) {
+    const result = await serverRequest("/pairing/exchange", {
+      method: "POST",
+      body: JSON.stringify({ code: String(code || "").trim() }),
+      skipAuth: true
+    });
+    if (typeof result.token !== "string" || !result.token) {
+      throw new Error("桌面伴侣返回的配对凭据无效");
+    }
+    await chrome.storage.local.set({ [TOKEN_KEY]: result.token });
+    try {
+      await verifyServiceIdentity(result.token, true);
+    } catch (error) {
+      await chrome.storage.local.set({ [TOKEN_KEY]: "" });
+      invalidateServiceProof();
+      throw error;
+    }
+    backend = "unknown";
+    await migrateLocalEntries();
+    return true;
+  }
+
   return {
     addEntry,
     currentBackend: () => backend,
@@ -350,6 +518,7 @@ const KnowledgeStore = (() => {
     importEntries,
     isValidEntry,
     normalizeTags,
+    pairDesktop,
     recordView,
     suggestTags,
     syncCloud,

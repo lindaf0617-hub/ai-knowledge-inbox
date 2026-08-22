@@ -9,11 +9,15 @@ AI Knowledge Inbox is designed to keep knowledge under the user's control.
 - During the bounded v1 migration window, `knowledge-sync.json` is read-only to v2 so late v1 writes are not overwritten; v2-originated changes remain in operation logs until migration completes.
 - Daily SQLite backups are stored locally in `%LOCALAPPDATA%\AIKnowledgeInbox\backups`, with the newest seven retained. A restore creates a safety backup first.
 - Browser-local storage is used only when the desktop service is unavailable.
+- Existing browser-local entries are retained until an authenticated migration completes successfully.
 
 ## Network behavior
 
 - The desktop API listens on `127.0.0.1:43127` only.
 - Requests from normal web origins are rejected.
+- Sensitive routes require a random per-install bearer token stored in the companion data directory. The token is provisioned to an extension only after the user enters a short-lived, one-time desktop pairing code, and is then held in `chrome.storage.local`.
+- Before the extension or companion sends that token or a knowledge payload, it verifies a nonce-bound HMAC proof from the service. A process merely impersonating port `43127` cannot produce the proof; verification failure blocks the request and never triggers browser-local mutation fallback. The challenge exposes no token or knowledge.
+- Unauthenticated health checks reveal only service availability. Authenticated diagnostics contain counts and redacted paths, never knowledge titles, content, source URLs, operation payloads, tokens, or provider secrets.
 - The project does not operate a hosted backend or telemetry endpoint.
 - Browser built-in AI is invoked locally when the browser exposes Prompt API.
 - If the user selects Ollama in Ask, only the question and selected, length-bounded source content are sent to the local Ollama API at `http://127.0.0.1:11434`; cloud endpoints are not configurable.

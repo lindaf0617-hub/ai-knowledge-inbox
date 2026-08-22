@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added per-install bearer authentication for sensitive local APIs, timing-safe verification, extension-origin enforcement, and minimal unauthenticated health checks.
+- Added nonce-bound HMAC service-identity proof before clients send bearer credentials or sensitive bodies, preventing localhost port impersonation from stealing stored tokens.
+- Added one-time desktop-mediated extension pairing, explicit pairing-required UI, authenticated migration that preserves browser-local data, and Windows/macOS pairing actions.
+- Added authenticated, redacted diagnostics JSON export from both desktop companions.
 - Added normalized retrieval scores, query-centered source excerpts, stable source cards, and accessible citation links.
 - Enforced at least one valid citation, rejected unknown source IDs, and added a persistent warning for substantial uncited paragraphs.
 - Added an Ask provider registry with browser Prompt API and localhost-only Ollama support, persisted non-secret provider/model settings, bounded prompts, and explicit local-service/model errors.

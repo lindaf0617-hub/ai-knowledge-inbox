@@ -207,10 +207,18 @@ function updateBackendStatus() {
   elements.backendStatus.className = `backend-status ${mode}`;
   elements.backendStatus.textContent = mode === "server"
     ? I18n.t("共享 SQLite 已连接")
-    : I18n.t("浏览器本地模式");
+    : mode === "security"
+      ? I18n.t("安全错误：无法验证桌面伴侣身份")
+    : mode === "pairing"
+      ? I18n.t("需要配对桌面伴侣")
+      : I18n.t("浏览器本地模式");
   elements.backendStatus.title = mode === "server"
     ? "浏览器扩展与桌面伴侣正在使用同一本地数据库"
-    : "启动桌面伴侣后，本地数据会自动迁移到共享数据库";
+    : mode === "security"
+      ? "本地服务身份验证失败；未发送凭据或知识内容"
+      : mode === "pairing"
+      ? "请打开扩展弹窗输入桌面伴侣生成的配对码"
+      : "启动桌面伴侣后，本地数据会自动迁移到共享数据库";
 }
 
 function formatSyncStatus(status) {

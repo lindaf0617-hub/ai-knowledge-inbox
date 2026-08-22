@@ -30,6 +30,8 @@ build_arch() {
     -target "${swift_arch}-apple-macos12.0" \
     -framework AppKit \
     -framework Carbon \
+    -framework CryptoKit \
+    -framework Security \
     "$ROOT/macos/Sources/AIKnowledgeCompanion/main.swift" \
     -o "$macos/AIKnowledgeCompanion"
 

@@ -6,21 +6,42 @@ const projectInput = document.getElementById("project");
 const tagsInput = document.getElementById("tags");
 const status = document.getElementById("status");
 const backendStatus = document.getElementById("backend");
+const pairingForm = document.getElementById("pairing");
+const pairingCode = document.getElementById("pairingCode");
 I18n.bindPicker(document.getElementById("languagePicker"));
 
 async function updateBackendStatus() {
   const mode = await KnowledgeStore.getBackendStatus();
   backendStatus.textContent = mode === "server"
     ? I18n.t("共享 SQLite 已连接")
-    : `${I18n.t("浏览器本地模式")} · ${
+    : mode === "security"
+      ? I18n.t("安全错误：无法验证桌面伴侣身份")
+    : mode === "pairing"
+      ? I18n.t("需要配对桌面伴侣")
+      : `${I18n.t("浏览器本地模式")} · ${
       I18n.getLanguage() === "en"
         ? "Start the desktop companion to migrate automatically"
         : "启动桌面伴侣后自动迁移"
     }`;
+  pairingForm.style.display = mode === "pairing" ? "block" : "none";
   backendStatus.style.color = mode === "server"
     ? "var(--cp-success)"
-    : "var(--cp-warning)";
+    : mode === "security" ? "var(--cp-danger)" : "var(--cp-warning)";
 }
+
+pairingForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    await KnowledgeStore.pairDesktop(pairingCode.value);
+    pairingCode.value = "";
+    status.textContent = I18n.t("桌面伴侣配对成功");
+    status.style.color = "var(--cp-success)";
+    await updateBackendStatus();
+  } catch (error) {
+    status.textContent = I18n.t(error.message || "配对失败");
+    status.style.color = "var(--cp-danger)";
+  }
+});
 
 function applySuggestedTags(force = false) {
   if (!force && tagsInput.value.trim()) return;

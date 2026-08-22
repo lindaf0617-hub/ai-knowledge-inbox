@@ -25,6 +25,8 @@ const RESTORE_JOURNAL = path.join(DATA_DIR, "restore-journal.json");
 const RESTORE_ORIGINAL = path.join(DATA_DIR, "knowledge.db.restore-original");
 const RESTORE_CANDIDATE = path.join(DATA_DIR, "knowledge.db.restore-candidate");
 const SERVER_PID_FILE = path.join(DATA_DIR, "server.pid");
+const AUTH_TOKEN_FILE = path.join(DATA_DIR, "auth-token");
+const PAIRED_ORIGINS_FILE = path.join(DATA_DIR, "paired-origins.json");
 const ONEDRIVE_ROOT =
   process.env.AI_KNOWLEDGE_ONEDRIVE ||
   process.env.OneDriveCommercial ||
@@ -41,12 +43,65 @@ const SCHEMA_VERSION = 2;
 const BACKUP_RETENTION = { daily: 7, manual: 10, "pre-restore": 5 };
 const MIXED_VERSION_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
+const APP_VERSION = process.env.AI_KNOWLEDGE_APP_VERSION || "1.6.0";
+const PAIRING_TTL_MS = Math.max(
+  100,
+  Number(process.env.AI_KNOWLEDGE_PAIRING_TTL_MS || 5 * 60 * 1000)
+);
+const PAIRING_MAX_ATTEMPTS = Math.max(
+  1,
+  Number(process.env.AI_KNOWLEDGE_PAIRING_MAX_ATTEMPTS || 5)
+);
+const PAIRING_RATE_WINDOW_MS = 60 * 1000;
+const PAIRING_RATE_LIMIT = 12;
+const AUTH_CHALLENGE_DOMAIN = "AIKnowledgeInbox.LocalAPI.AuthChallenge";
+const AUTH_CHALLENGE_PROTOCOL = 1;
+const AUTH_CHALLENGE_RATE_LIMIT = Math.max(
+  1,
+  Number(process.env.AI_KNOWLEDGE_CHALLENGE_RATE_LIMIT || 120)
+);
 const BODY_TIMEOUT_MS = Math.max(
   100,
   Number(process.env.AI_KNOWLEDGE_BODY_TIMEOUT_MS || 5000)
 );
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+try { fs.chmodSync(DATA_DIR, 0o700); } catch {}
+
+function loadOrCreateAuthToken() {
+  if (fs.existsSync(AUTH_TOKEN_FILE)) {
+    const existing = fs.readFileSync(AUTH_TOKEN_FILE, "utf8").trim();
+    if (!/^[A-Za-z0-9_-]{43}$/.test(existing)) {
+      throw new Error("Local API authentication token file is invalid");
+    }
+    try { fs.chmodSync(AUTH_TOKEN_FILE, 0o600); } catch {}
+    return existing;
+  }
+  const token = crypto.randomBytes(32).toString("base64url");
+  fs.writeFileSync(AUTH_TOKEN_FILE, `${token}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600
+  });
+  try { fs.chmodSync(AUTH_TOKEN_FILE, 0o600); } catch {}
+  return token;
+}
+
+const AUTH_TOKEN = loadOrCreateAuthToken();
+const pairedOrigins = new Set();
+try {
+  const savedOrigins = JSON.parse(fs.readFileSync(PAIRED_ORIGINS_FILE, "utf8"));
+  if (Array.isArray(savedOrigins)) {
+    for (const origin of savedOrigins) {
+      if (typeof origin === "string" && isExtensionOrigin(origin)) pairedOrigins.add(origin);
+    }
+  }
+} catch {}
+
+let activePairing = null;
+const pairingRate = new Map();
+const challengeRate = new Map();
+const recentErrors = [];
 
 function fsyncDirectory(directory) {
   let handle;
@@ -274,9 +329,11 @@ function openDatabase() {
 function prepareStatements() {
   statements = {
     list: db.prepare("SELECT * FROM entries ORDER BY created_at DESC"),
+    entryCount: db.prepare("SELECT COUNT(*) AS count FROM entries"),
     find: db.prepare("SELECT * FROM entries WHERE id = ?"),
     findByContent: db.prepare("SELECT id, title FROM entries WHERE content_key = ?"),
     listTombstones: db.prepare("SELECT id, deleted_at FROM tombstones"),
+    tombstoneCount: db.prepare("SELECT COUNT(*) AS count FROM tombstones"),
     findTombstone: db.prepare("SELECT deleted_at FROM tombstones WHERE id = ?"),
     insert: db.prepare(`
       INSERT INTO entries (
@@ -1775,11 +1832,187 @@ function resolveConflict(id, input) {
   });
 }
 
+function isExtensionOrigin(origin) {
+  return typeof origin === "string" &&
+    /^(?:chrome|edge|moz)-extension:\/\/[a-z0-9@._-]{1,128}$/i.test(origin);
+}
+
 function allowedOrigin(origin) {
-  return !origin ||
-    origin.startsWith("chrome-extension://") ||
-    origin.startsWith("edge-extension://") ||
-    origin.startsWith("moz-extension://");
+  return !origin || isExtensionOrigin(origin);
+}
+
+function tokenMatches(candidate) {
+  const expectedDigest = crypto.createHash("sha256").update(AUTH_TOKEN).digest();
+  const candidateDigest = crypto.createHash("sha256")
+    .update(typeof candidate === "string" ? candidate : "")
+    .digest();
+  return crypto.timingSafeEqual(expectedDigest, candidateDigest);
+}
+
+function requestIsAuthorized(request) {
+  const match = /^Bearer ([A-Za-z0-9_-]+)$/.exec(request.headers.authorization || "");
+  return Boolean(match && tokenMatches(match[1]));
+}
+
+function persistPairedOrigins() {
+  atomicWriteJson(PAIRED_ORIGINS_FILE, [...pairedOrigins].sort());
+  try { fs.chmodSync(PAIRED_ORIGINS_FILE, 0o600); } catch {}
+}
+
+function createPairingCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const random = crypto.randomBytes(8);
+  const code = [...random].map(value => alphabet[value % alphabet.length]).join("");
+  activePairing = {
+    digest: crypto.createHash("sha256").update(code).digest(),
+    expiresAt: Date.now() + PAIRING_TTL_MS,
+    attempts: 0
+  };
+  return {
+    code,
+    expiresAt: new Date(activePairing.expiresAt).toISOString(),
+    maxAttempts: PAIRING_MAX_ATTEMPTS
+  };
+}
+
+function pairingRateAllowed(origin) {
+  const now = Date.now();
+  const recent = (pairingRate.get(origin) || [])
+    .filter(timestamp => now - timestamp < PAIRING_RATE_WINDOW_MS);
+  recent.push(now);
+  pairingRate.set(origin, recent);
+  return recent.length <= PAIRING_RATE_LIMIT;
+}
+
+function challengeRateAllowed(request) {
+  const key = `${request.headers.origin || "native"}:${request.socket.remoteAddress || "loopback"}`;
+  const now = Date.now();
+  const recent = (challengeRate.get(key) || [])
+    .filter(timestamp => now - timestamp < PAIRING_RATE_WINDOW_MS);
+  recent.push(now);
+  challengeRate.set(key, recent);
+  return recent.length <= AUTH_CHALLENGE_RATE_LIMIT;
+}
+
+function createAuthChallenge(request, input) {
+  if (!challengeRateAllowed(request)) {
+    throw apiError(429, "身份验证请求过于频繁，请稍后再试");
+  }
+  if (input.protocol !== AUTH_CHALLENGE_PROTOCOL ||
+      typeof input.nonce !== "string" ||
+      !/^[A-Za-z0-9_-]{32,128}$/.test(input.nonce)) {
+    throw apiError(400, "身份验证随机数格式不正确");
+  }
+  const message = [
+    AUTH_CHALLENGE_DOMAIN,
+    String(AUTH_CHALLENGE_PROTOCOL),
+    input.nonce
+  ].join("\n");
+  const proof = crypto.createHmac("sha256", AUTH_TOKEN)
+    .update(message)
+    .digest("hex");
+  return {
+    domain: AUTH_CHALLENGE_DOMAIN,
+    protocol: AUTH_CHALLENGE_PROTOCOL,
+    nonce: input.nonce,
+    proof
+  };
+}
+
+function exchangePairingCode(origin, input) {
+  if (!pairingRateAllowed(origin)) {
+    throw apiError(429, "配对尝试过于频繁，请稍后再试");
+  }
+  if (!activePairing || Date.now() >= activePairing.expiresAt) {
+    activePairing = null;
+    throw apiError(410, "配对码已过期，请在桌面伴侣中重新生成");
+  }
+  activePairing.attempts += 1;
+  const supplied = String(input.code || "").trim().toUpperCase();
+  const suppliedDigest = crypto.createHash("sha256").update(supplied).digest();
+  const matched = crypto.timingSafeEqual(activePairing.digest, suppliedDigest);
+  if (!matched) {
+    const exhausted = activePairing.attempts >= PAIRING_MAX_ATTEMPTS;
+    if (exhausted) activePairing = null;
+    throw apiError(
+      exhausted ? 429 : 401,
+      exhausted ? "配对尝试次数已用完，请重新生成配对码" : "配对码不正确"
+    );
+  }
+  activePairing = null;
+  pairedOrigins.add(origin);
+  persistPairedOrigins();
+  return { token: AUTH_TOKEN };
+}
+
+function redactPath(value) {
+  if (!value) return "";
+  const home = path.resolve(os.homedir());
+  const resolved = path.resolve(value);
+  const relative = path.relative(home, resolved);
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+    return path.join("<home>", relative);
+  }
+  return resolved;
+}
+
+function sanitizedError(value) {
+  let text = String(value || "Unknown error");
+  const home = os.homedir();
+  if (home) text = text.split(home).join("<home>");
+  text = text
+    .replace(/https?:\/\/\S+/gi, "<url>")
+    .replace(/Bearer\s+\S+/gi, "Bearer <redacted>")
+    .replace(/[A-Za-z0-9_-]{40,}/g, "<redacted>");
+  return text.slice(0, 240);
+}
+
+function recordDiagnosticError(area, error) {
+  recentErrors.unshift({
+    at: new Date().toISOString(),
+    area,
+    summary: sanitizedError(error?.message || error)
+  });
+  recentErrors.length = Math.min(recentErrors.length, 10);
+}
+
+function diagnostics() {
+  const status = syncStatus();
+  return {
+    app: { name: "AI Knowledge Inbox", version: APP_VERSION },
+    schemaVersion,
+    platform: {
+      os: process.platform,
+      arch: process.arch,
+      node: process.version
+    },
+    storage: "sqlite",
+    sync: {
+      enabled: status.enabled,
+      status: status.status,
+      lastSyncAt: status.lastSyncAt,
+      lastError: sanitizedError(status.lastError),
+      degradedFileCount: status.degradedFiles.length
+    },
+    providers: {
+      browserAI: "client-managed",
+      ollama: "client-managed"
+    },
+    counts: {
+      entries: Number(statements.entryCount.get().count),
+      tombstones: Number(statements.tombstoneCount.get().count),
+      operations: status.operationCount,
+      conflicts: status.conflictCount,
+      backups: listBackups().length
+    },
+    paths: {
+      data: redactPath(DATA_DIR),
+      database: redactPath(DB_PATH),
+      sync: redactPath(SYNC_DIR),
+      backups: redactPath(BACKUP_DIR)
+    },
+    recentErrors: [...recentErrors]
+  };
 }
 
 function setCors(request, response) {
@@ -1788,7 +2021,7 @@ function setCors(request, response) {
     response.setHeader("Access-Control-Allow-Origin", origin);
     response.setHeader("Vary", "Origin");
   }
-  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
   response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
 }
 
@@ -1861,7 +2094,9 @@ function requestNeedsJson(method, pathname) {
   return (method === "POST" && [
     "/entries",
     "/import",
-    "/backups/restore"
+    "/backups/restore",
+    "/pairing/exchange",
+    "/auth/challenge"
   ].includes(pathname)) ||
     (method === "PUT" && /^\/entries\/[^/]+$/.test(pathname)) ||
     (method === "POST" && /^\/sync\/conflicts\/[^/]+\/resolve$/.test(pathname));
@@ -1880,6 +2115,33 @@ const server = http.createServer(async (request, response) => {
   }
 
   const url = new URL(request.url, `http://${HOST}:${PORT}`);
+  const authorized = requestIsAuthorized(request);
+  if (request.method === "GET" && url.pathname === "/health" && !authorized) {
+    sendJson(response, 200, {
+      status: "ok",
+      app: "AI Knowledge Inbox",
+      authRequired: true
+    });
+    return;
+  }
+  const pairingExchange =
+    request.method === "POST" && url.pathname === "/pairing/exchange";
+  const authChallenge =
+    request.method === "POST" && url.pathname === "/auth/challenge";
+  if (!pairingExchange && !authChallenge && !authorized) {
+    response.setHeader("WWW-Authenticate", "Bearer");
+    sendJson(response, 401, { error: "需要配对桌面伴侣" });
+    return;
+  }
+  if (request.headers.origin && !pairingExchange && !authChallenge &&
+      !pairedOrigins.has(request.headers.origin)) {
+    sendJson(response, 403, { error: "扩展尚未与此桌面伴侣配对" });
+    return;
+  }
+  if (pairingExchange && !isExtensionOrigin(request.headers.origin)) {
+    sendJson(response, 403, { error: "配对交换仅允许浏览器扩展" });
+    return;
+  }
   const selfGated = request.method === "POST" && url.pathname === "/sync";
   let requestBody;
   let releaseGate;
@@ -1888,6 +2150,10 @@ const server = http.createServer(async (request, response) => {
       requestBody = await readJson(request);
     }
     if (shuttingDown) throw apiError(503, "服务正在关闭");
+    if (authChallenge) {
+      sendJson(response, 200, createAuthChallenge(request, requestBody));
+      return;
+    }
     if (!selfGated) releaseGate = await acquireDatabaseGate();
     if (process.env.AI_KNOWLEDGE_TEST_SHUTDOWN === "1" &&
         request.method === "POST" && url.pathname === "/test/shutdown") {
@@ -1904,6 +2170,18 @@ const server = http.createServer(async (request, response) => {
         database: DB_PATH,
         cloud: syncStatus()
       });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/pairing/code") {
+      sendJson(response, 201, createPairingCode());
+      return;
+    }
+    if (pairingExchange) {
+      sendJson(response, 200, exchangePairingCode(request.headers.origin, requestBody));
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/diagnostics") {
+      sendJson(response, 200, diagnostics());
       return;
     }
     if (request.method === "GET" && url.pathname === "/sync/status") {
@@ -1990,7 +2268,10 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, 404, { error: "接口不存在" });
   } catch (error) {
     const status = error.status || 500;
-    if (status >= 500) console.error(error);
+    if (status >= 500) {
+      recordDiagnosticError("request", error);
+      console.error(error);
+    }
     sendJson(response, status, { error: error.message || "服务内部错误" });
   } finally {
     if (releaseGate) releaseGate();

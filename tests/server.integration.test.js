@@ -1,9 +1,11 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { DatabaseSync } = require("node:sqlite");
@@ -19,6 +21,7 @@ const remoteOperations = [];
 let service;
 let base;
 let paths;
+const serviceTokens = new Map();
 
 function availablePort() {
   return new Promise((resolve, reject) => {
@@ -65,7 +68,9 @@ async function startService(serviceDataDir, serviceOneDrive, extraEnvironment = 
     errors.value += chunk.toString();
   });
   await waitForService(url, child, errors);
-  return { child, url, errors };
+  const token = fs.readFileSync(path.join(serviceDataDir, "auth-token"), "utf8").trim();
+  serviceTokens.set(url, token);
+  return { child, url, errors, token };
 }
 
 async function stopService(instance) {
@@ -76,6 +81,7 @@ async function stopService(instance) {
     exited,
     new Promise(resolve => setTimeout(resolve, 3000))
   ]);
+  serviceTokens.delete(instance.url);
 }
 
 async function request(route, options = {}, url = base) {
@@ -83,6 +89,9 @@ async function request(route, options = {}, url = base) {
     ...options,
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(serviceTokens.has(url)
+        ? { Authorization: `Bearer ${serviceTokens.get(url)}` }
+        : {}),
       ...(options.headers || {})
     }
   });
@@ -709,6 +718,264 @@ test("health and sync status expose v2 storage details", async () => {
   assert.equal(body.cloud.paths.operations, path.join(
     oneDrive, "Apps", "AI Knowledge Inbox", "operations"
   ));
+});
+
+test("bearer authentication protects sensitive routes while health stays minimal", async () => {
+  const unauthenticated = await request("/entries", {
+    headers: { Authorization: "" }
+  });
+  assert.equal(unauthenticated.response.status, 401);
+  assert.equal(unauthenticated.response.headers.get("www-authenticate"), "Bearer");
+
+  const invalid = await request("/entries", {
+    headers: { Authorization: "Bearer definitely-wrong" }
+  });
+  assert.equal(invalid.response.status, 401);
+
+  const valid = await request("/entries");
+  assert.equal(valid.response.status, 200);
+
+  const health = await request("/health", {
+    headers: { Authorization: "" }
+  });
+  assert.deepEqual(health.body, {
+    status: "ok",
+    app: "AI Knowledge Inbox",
+    authRequired: true
+  });
+  assert.equal(JSON.stringify(health.body).includes(service.token), false);
+  assert.equal(service.errors.value.includes(service.token), false);
+  const authenticatedHealth = await request("/health");
+  const sync = await request("/sync/status");
+  assert.equal(JSON.stringify([authenticatedHealth.body, sync.body]).includes(service.token), false);
+});
+
+test("authentication token persists with restrictive permissions", async () => {
+  const authRoot = path.join(root, "auth-persistence");
+  const authData = path.join(authRoot, "data");
+  const authCloud = path.join(authRoot, "cloud");
+  const first = await startService(authData, authCloud);
+  const originalToken = first.token;
+  const tokenPath = path.join(authData, "auth-token");
+  try {
+    assert.match(originalToken, /^[A-Za-z0-9_-]{43}$/);
+    if (process.platform !== "win32") {
+      assert.equal(fs.statSync(tokenPath).mode & 0o077, 0);
+    }
+  } finally {
+    await stopService(first);
+  }
+  const restarted = await startService(authData, authCloud);
+  try {
+    assert.equal(restarted.token, originalToken);
+  } finally {
+    await stopService(restarted);
+  }
+});
+
+test("authentication challenge proves token possession without exposing it", async () => {
+  const nonce = crypto.randomBytes(32).toString("hex");
+  const challenge = await request("/auth/challenge", {
+    method: "POST",
+    headers: {
+      Origin: "chrome-extension://eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      Authorization: ""
+    },
+    body: JSON.stringify({ protocol: 1, nonce })
+  });
+  assert.equal(challenge.response.status, 200);
+  assert.deepEqual(
+    {
+      domain: challenge.body.domain,
+      protocol: challenge.body.protocol,
+      nonce: challenge.body.nonce
+    },
+    {
+      domain: "AIKnowledgeInbox.LocalAPI.AuthChallenge",
+      protocol: 1,
+      nonce
+    }
+  );
+  const expected = crypto.createHmac("sha256", service.token)
+    .update(`AIKnowledgeInbox.LocalAPI.AuthChallenge\n1\n${nonce}`)
+    .digest("hex");
+  assert.equal(challenge.body.proof, expected);
+  assert.equal(JSON.stringify(challenge.body).includes(service.token), false);
+
+  const invalid = await request("/auth/challenge", {
+    method: "POST",
+    headers: { Authorization: "" },
+    body: JSON.stringify({ protocol: 1, nonce: "too-short" })
+  });
+  assert.equal(invalid.response.status, 400);
+});
+
+test("authentication challenge endpoint is rate limited", async () => {
+  const challengeRoot = path.join(root, "challenge-rate");
+  const limited = await startService(
+    path.join(challengeRoot, "data"),
+    path.join(challengeRoot, "cloud"),
+    { AI_KNOWLEDGE_CHALLENGE_RATE_LIMIT: "2" }
+  );
+  try {
+    const statuses = [];
+    for (let index = 0; index < 3; index += 1) {
+      const result = await request("/auth/challenge", {
+        method: "POST",
+        headers: { Authorization: "" },
+        body: JSON.stringify({
+          protocol: 1,
+          nonce: crypto.randomBytes(32).toString("hex")
+        })
+      }, limited.url);
+      statuses.push(result.response.status);
+    }
+    assert.deepEqual(statuses, [200, 200, 429]);
+  } finally {
+    await stopService(limited);
+  }
+});
+
+test("pairing is extension-only, one-time, and authorizes only the paired origin", async () => {
+  const origin = "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const codeResult = await request("/pairing/code", { method: "POST" });
+  assert.equal(codeResult.response.status, 201);
+  assert.match(codeResult.body.code, /^[A-Z2-9]{8}$/);
+
+  const rejectedWeb = await request("/pairing/exchange", {
+    method: "POST",
+    headers: { Origin: "https://evil.example", Authorization: "" },
+    body: JSON.stringify({ code: codeResult.body.code })
+  });
+  assert.equal(rejectedWeb.response.status, 403);
+
+  const exchanged = await request("/pairing/exchange", {
+    method: "POST",
+    headers: { Origin: origin, Authorization: "" },
+    body: JSON.stringify({ code: codeResult.body.code })
+  });
+  assert.equal(exchanged.response.status, 200);
+  assert.equal(exchanged.body.token, service.token);
+
+  const replay = await request("/pairing/exchange", {
+    method: "POST",
+    headers: { Origin: origin, Authorization: "" },
+    body: JSON.stringify({ code: codeResult.body.code })
+  });
+  assert.equal(replay.response.status, 410);
+
+  const paired = await request("/entries", { headers: { Origin: origin } });
+  assert.equal(paired.response.status, 200);
+  const unpaired = await request("/entries", {
+    headers: { Origin: "chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+  });
+  assert.equal(unpaired.response.status, 403);
+});
+
+test("pairing codes expire and enforce an attempt bound", async () => {
+  const pairingRoot = path.join(root, "pairing-limits");
+  const expiring = await startService(
+    path.join(pairingRoot, "expiry-data"),
+    path.join(pairingRoot, "expiry-cloud"),
+    { AI_KNOWLEDGE_PAIRING_TTL_MS: "100" }
+  );
+  try {
+    const generated = await request("/pairing/code", { method: "POST" }, expiring.url);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const expired = await request("/pairing/exchange", {
+      method: "POST",
+      headers: {
+        Origin: "chrome-extension://cccccccccccccccccccccccccccccccc",
+        Authorization: ""
+      },
+      body: JSON.stringify({ code: generated.body.code })
+    }, expiring.url);
+    assert.equal(expired.response.status, 410);
+  } finally {
+    await stopService(expiring);
+  }
+
+  const bounded = await startService(
+    path.join(pairingRoot, "attempt-data"),
+    path.join(pairingRoot, "attempt-cloud"),
+    { AI_KNOWLEDGE_PAIRING_MAX_ATTEMPTS: "2" }
+  );
+  try {
+    await request("/pairing/code", { method: "POST" }, bounded.url);
+    const headers = {
+      Origin: "chrome-extension://dddddddddddddddddddddddddddddddd",
+      Authorization: ""
+    };
+    const first = await request("/pairing/exchange", {
+      method: "POST", headers, body: JSON.stringify({ code: "WRONG222" })
+    }, bounded.url);
+    const second = await request("/pairing/exchange", {
+      method: "POST", headers, body: JSON.stringify({ code: "WRONG333" })
+    }, bounded.url);
+    assert.equal(first.response.status, 401);
+    assert.equal(second.response.status, 429);
+  } finally {
+    await stopService(bounded);
+  }
+});
+
+test("diagnostics are authenticated and redact knowledge, secrets, and home paths", async () => {
+  const secretTitle = "PRIVATE-DIAGNOSTIC-TITLE";
+  const secretSource = "https://secret.example/private";
+  await request("/entries", {
+    method: "POST",
+    body: JSON.stringify({
+      title: secretTitle,
+      content: "PRIVATE-DIAGNOSTIC-CONTENT",
+      source: secretSource
+    })
+  });
+  const unauthorized = await request("/diagnostics", {
+    headers: { Authorization: "" }
+  });
+  assert.equal(unauthorized.response.status, 401);
+  const result = await request("/diagnostics");
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.schemaVersion, 2);
+  assert.equal(typeof result.body.counts.entries, "number");
+  const serialized = JSON.stringify(result.body);
+  for (const forbidden of [
+    secretTitle,
+    secretSource,
+    "PRIVATE-DIAGNOSTIC-CONTENT",
+    service.token,
+    os.homedir()
+  ]) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
+  assert.equal(/hmac|proof/i.test(serialized), false);
+  assert.ok(serialized.includes("<home>"));
+});
+
+test("desktop companions verify service identity before creating bearer headers", () => {
+  const windows = fs.readFileSync(
+    path.join(__dirname, "..", "desktop", "desktop-companion.ps1"),
+    "utf8"
+  );
+  const macos = fs.readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "macos",
+      "Sources",
+      "AIKnowledgeCompanion",
+      "main.swift"
+    ),
+    "utf8"
+  );
+  assert.match(
+    windows,
+    /function Get-AuthHeaders\s*\{\s*Assert-ServiceIdentity[\s\S]*?Authorization/
+  );
+  assert.match(
+    macos,
+    /private func authorizedRequest[\s\S]*?try verifyServiceIdentity\(\)[\s\S]*?forHTTPHeaderField: "Authorization"/
+  );
 });
 
 test("existing CRUD, duplicate prevention, and view tracking remain compatible", async () => {
@@ -1383,7 +1650,10 @@ test("incomplete mutation body does not block health or restore serialization", 
     const responsePromise = new Promise((resolve, reject) => {
       const delayed = http.request(`${gated.url}/entries`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" }
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${gated.token}`
+        }
       }, response => {
         const chunks = [];
         response.on("data", chunk => chunks.push(chunk));
@@ -1430,7 +1700,10 @@ test("incomplete mutation body times out with an error response", async () => {
     const responsePromise = new Promise((resolve, reject) => {
       delayed = http.request(`${timed.url}/entries`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" }
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${timed.token}`
+        }
       }, response => {
         const chunks = [];
         response.on("data", chunk => chunks.push(chunk));
