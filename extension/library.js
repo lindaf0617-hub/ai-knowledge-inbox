@@ -50,6 +50,49 @@ const elements = {
   toast: document.getElementById("toast")
 };
 
+if (!elements.pairingForm) {
+  const form = document.createElement("form");
+  form.id = "libraryPairing";
+  form.className = "library-pairing";
+  form.style.display = "none";
+  form.style.maxWidth = "520px";
+  form.style.marginTop = "12px";
+  form.style.padding = "12px";
+  form.style.border = "1px solid var(--cp-warning)";
+  form.style.borderRadius = "14px";
+  form.style.background = "var(--cp-surface-soft)";
+
+  const help = document.createElement("p");
+  help.textContent = "在桌面伴侣菜单中生成配对码，然后在这里输入。";
+  help.style.margin = "0 0 8px";
+  help.style.color = "var(--cp-text-muted)";
+  help.style.fontSize = "12px";
+
+  const row = document.createElement("div");
+  row.style.display = "flex";
+  row.style.gap = "8px";
+
+  const input = document.createElement("input");
+  input.id = "libraryPairingCode";
+  input.maxLength = 8;
+  input.autocomplete = "one-time-code";
+  input.placeholder = "8 位配对码";
+  input.style.height = "40px";
+  input.style.padding = "8px 10px";
+  input.style.textTransform = "uppercase";
+
+  const button = document.createElement("button");
+  button.className = "button primary";
+  button.type = "submit";
+  button.textContent = "配对";
+
+  row.append(input, button);
+  form.append(help, row);
+  elements.updateResult.insertAdjacentElement("afterend", form);
+  elements.pairingForm = form;
+  elements.pairingCode = input;
+}
+
 function formatTime(value) {
   return new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
