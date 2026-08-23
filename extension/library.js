@@ -826,6 +826,11 @@ async function refreshEntries() {
     await refreshSyncStatus();
     await refreshVersionStatus();
   } catch (error) {
+    updateBackendStatus();
+    if (error.pairingRequired) {
+      elements.syncStatus.textContent = I18n.t("需要配对桌面伴侣");
+      elements.versionStatus.textContent = I18n.t("需要配对桌面伴侣");
+    }
     showToast(error.message || "读取知识库失败");
   }
 }
