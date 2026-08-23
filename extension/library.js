@@ -17,6 +17,8 @@ const elements = {
   syncStatus: document.getElementById("syncStatus"),
   versionStatus: document.getElementById("versionStatus"),
   updateResult: document.getElementById("updateResult"),
+  pairingForm: document.getElementById("libraryPairing"),
+  pairingCode: document.getElementById("libraryPairingCode"),
   checkUpdates: document.getElementById("checkUpdates"),
   prereleaseChannel: document.getElementById("prereleaseChannel"),
   skinPicker: document.getElementById("skinPicker"),
@@ -223,7 +225,20 @@ function updateBackendStatus() {
       : mode === "pairing"
       ? "请打开扩展弹窗输入桌面伴侣生成的配对码"
       : "启动桌面伴侣后，本地数据会自动迁移到共享数据库";
+  elements.pairingForm.style.display = mode === "pairing" ? "block" : "none";
 }
+
+elements.pairingForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    await KnowledgeStore.pairDesktop(elements.pairingCode.value);
+    elements.pairingCode.value = "";
+    showToast("桌面伴侣配对成功");
+    await refreshEntries();
+  } catch (error) {
+    showToast(error.message || "配对失败");
+  }
+});
 
 function formatSyncStatus(status) {
   elements.syncStatus.className = `sync-line${status.status === "error" ? " error" : ""}`;

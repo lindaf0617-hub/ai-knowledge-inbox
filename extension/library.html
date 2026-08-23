@@ -54,6 +54,26 @@
       font-size: 12px;
     }
     .sync-line.error { color: var(--cp-danger); }
+    .library-pairing {
+      display: none;
+      max-width: 520px;
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--cp-warning);
+      border-radius: 14px;
+      background: var(--cp-surface-soft);
+    }
+    .library-pairing p {
+      margin: 0 0 8px;
+      color: var(--cp-text-muted);
+      font-size: 12px;
+    }
+    .library-pair-row { display: flex; gap: 8px; }
+    .library-pair-row input {
+      height: 40px;
+      padding: 8px 10px;
+      text-transform: uppercase;
+    }
     .version-line {
       margin-top: 7px;
       color: var(--cp-text-muted);
@@ -557,6 +577,13 @@
         <div class="sync-line" id="syncStatus">正在检测 OneDrive 同步…</div>
         <div class="version-line" id="versionStatus">正在检测版本和身份状态…</div>
         <div class="version-line" id="updateResult" role="status"></div>
+        <form class="library-pairing" id="libraryPairing">
+          <p>在桌面伴侣菜单中生成配对码，然后在这里输入。</p>
+          <div class="library-pair-row">
+            <input id="libraryPairingCode" maxlength="8" autocomplete="one-time-code" placeholder="8 位配对码">
+            <button class="button primary" type="submit">配对</button>
+          </div>
+        </form>
       </div>
       <div class="header-actions">
         <button class="button" id="agentButton" type="button">Knowledge Agent</button>
