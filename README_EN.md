@@ -61,9 +61,17 @@ proposal-derived deterministic canonical entry ID as the approval target.
 
 ---
 
-![Knowledge library](store-assets/screenshot-library.png)
+### One-keystroke desktop capture
 
-![Ask with citations](store-assets/screenshot-ask.png)
+![One-keystroke desktop capture](store-assets/screenshot-desktop-v17.png)
+
+### Knowledge Agent with cited analysis
+
+![Knowledge Agent with cited analysis](store-assets/screenshot-agent-v17.png)
+
+### Unified knowledge library
+
+![Unified knowledge library](store-assets/screenshot-library-v17.png)
 
 ---
 

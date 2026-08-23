@@ -53,9 +53,17 @@ Agent 审批知识也不能直接删除；知识库中的操作会显示“撤�
 
 ---
 
-![Knowledge library](store-assets/screenshot-library.png)
+### 桌面一键采集
 
-![Ask with citations](store-assets/screenshot-ask.png)
+![桌面一键采集](store-assets/screenshot-desktop-v17.png)
+
+### Knowledge Agent 与引用式分析
+
+![Knowledge Agent 与引用式分析](store-assets/screenshot-agent-v17.png)
+
+### 统一知识库
+
+![统一知识库](store-assets/screenshot-library-v17.png)
 
 ---
 

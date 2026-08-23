@@ -84,7 +84,23 @@
     .channel-label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
     .channel-label input { width: auto; }
     .header-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .language-control {
+      display: flex;
+      min-width: 94px;
+      align-items: center;
+      flex-direction: column;
+      gap: 4px;
+      color: var(--cp-text-muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .language-control svg {
+      width: 18px;
+      height: 18px;
+      color: var(--cp-accent);
+    }
     .language-picker {
+      width: 100%;
       min-height: 40px;
       padding: 8px 10px;
       border: 1px solid var(--cp-border);
@@ -588,10 +604,17 @@
       <div class="header-actions">
         <button class="button" id="agentButton" type="button">Knowledge Agent</button>
         <button class="button primary" id="askButton" type="button">Ask 知识库</button>
-        <select class="language-picker" id="languagePicker" aria-label="界面语言">
-          <option value="zh">中文</option>
-          <option value="en">English</option>
-        </select>
+        <label class="language-control" title="选择界面语言">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"></circle>
+            <path d="M3.5 12h17M12 3c2.4 2.5 3.7 5.5 3.7 9S14.4 18.5 12 21M12 3C9.6 5.5 8.3 8.5 8.3 12S9.6 18.5 12 21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+          </svg>
+          <span>Language</span>
+          <select class="language-picker" id="languagePicker" aria-label="界面语言">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </label>
         <select class="skin-picker" id="skinPicker" aria-label="知识库配色">
           <option value="classic">配色 1 · 鲜艳</option>
           <option value="tech">配色 2 · 科技</option>
