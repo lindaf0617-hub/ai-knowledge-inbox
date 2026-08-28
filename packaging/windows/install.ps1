@@ -14,6 +14,7 @@ $startupDir = if ($testRoot) { Join-Path $testRoot "Startup" } else { [Environme
 $startupName = if ($signedPackage) { "AI Knowledge Companion.lnk" } else { "AI Knowledge Companion.cmd" }
 $startupFile = Join-Path $startupDir $startupName
 $startMenuDir = if ($testRoot) { Join-Path $testRoot "StartMenu" } else { Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\AI Knowledge Inbox" }
+$scheduledTaskName = "AI Knowledge Companion"
 
 function Assert-Source([string]$path, [string]$label) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -74,7 +75,10 @@ Assert-PayloadIntegrity
 
 New-Item -ItemType Directory -Force -Path $installRoot, $appDir, $extensionDir, $startupDir, $startMenuDir | Out-Null
 
-foreach ($pidName in @("companion.pid", "server.pid")) {
+if (-not $testRoot) {
+    Stop-ScheduledTask -TaskName $scheduledTaskName -ErrorAction SilentlyContinue
+}
+foreach ($pidName in @("watchdog.pid", "companion.pid", "server.pid")) {
     $pidPath = Join-Path $installRoot $pidName
     if (Test-Path -LiteralPath $pidPath) {
         $processId = Get-Content -LiteralPath $pidPath -ErrorAction SilentlyContinue
@@ -91,15 +95,16 @@ Copy-Item -Path (Join-Path $sourceExtension "*") -Destination $extensionDir -Rec
 Copy-Item -LiteralPath (Join-Path $packageRoot "uninstall.ps1") -Destination $appDir -Force
 
 $companionScript = Join-Path $appDir "desktop-companion.ps1"
+$watchdogScript = Join-Path $appDir "companion-watchdog.ps1"
 $shell = New-Object -ComObject WScript.Shell
 $executionPolicy = if ($signedPackage) { "AllSigned" } else { "Bypass" }
-if ($signedPackage) {
+if ($testRoot -and $signedPackage) {
     $startupShortcut = $shell.CreateShortcut($startupFile)
     $startupShortcut.TargetPath = "powershell.exe"
     $startupShortcut.Arguments = "-NoProfile -ExecutionPolicy AllSigned -STA -WindowStyle Hidden -File `"$companionScript`""
     $startupShortcut.WorkingDirectory = $appDir
     $startupShortcut.Save()
-} else {
+} elseif ($testRoot) {
     $startupContent = @"
 @echo off
 start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "$companionScript"
@@ -123,13 +128,34 @@ $uninstallShortcut.WorkingDirectory = $appDir
 $uninstallShortcut.Save()
 
 if (-not $testRoot) {
-    Start-Process powershell.exe -ArgumentList @(
-        "-NoProfile",
-        "-ExecutionPolicy", $executionPolicy,
-        "-STA",
-        "-WindowStyle", "Hidden",
-        "-File", "`"$companionScript`""
-    )
+    $taskAction = New-ScheduledTaskAction `
+        -Execute "powershell.exe" `
+        -Argument "-NoProfile -ExecutionPolicy $executionPolicy -WindowStyle Hidden -File `"$watchdogScript`""
+    $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $selfHealTrigger = New-ScheduledTaskTrigger `
+        -Once `
+        -At (Get-Date).AddMinutes(1) `
+        -RepetitionInterval (New-TimeSpan -Minutes 1) `
+        -RepetitionDuration (New-TimeSpan -Days 3650)
+    $taskPrincipal = New-ScheduledTaskPrincipal `
+        -UserId "$env:USERDOMAIN\$env:USERNAME" `
+        -LogonType Interactive `
+        -RunLevel Limited
+    $taskSettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -MultipleInstances IgnoreNew
+    Register-ScheduledTask `
+        -TaskName $scheduledTaskName `
+        -Action $taskAction `
+        -Trigger @($logonTrigger, $selfHealTrigger) `
+        -Principal $taskPrincipal `
+        -Settings $taskSettings `
+        -Description "Keeps the AI Knowledge Inbox hotkey alive and self-heals every minute." `
+        -Force | Out-Null
+    Start-ScheduledTask -TaskName $scheduledTaskName
 
     Set-Clipboard -Value $extensionDir
     try {

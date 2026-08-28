@@ -5,8 +5,12 @@ $appDir = Join-Path $installRoot "app"
 $extensionDir = Join-Path $installRoot "extension"
 $startupDirectory = [Environment]::GetFolderPath("Startup")
 $startMenuDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\AI Knowledge Inbox"
+$scheduledTaskName = "AI Knowledge Companion"
 
-foreach ($pidName in @("companion.pid", "server.pid")) {
+Stop-ScheduledTask -TaskName $scheduledTaskName -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName $scheduledTaskName -Confirm:$false -ErrorAction SilentlyContinue
+
+foreach ($pidName in @("watchdog.pid", "companion.pid", "server.pid")) {
     $pidPath = Join-Path $installRoot $pidName
     if (Test-Path -LiteralPath $pidPath) {
         $processId = Get-Content -LiteralPath $pidPath -ErrorAction SilentlyContinue
